@@ -96,7 +96,7 @@ def sum_intensities(
 
     # output merged dataset
     out = summary.merge(i_sum, on="_row_id", how="left").drop(columns="_row_id")
-    out["log_i_sum"] = out["i_sum"].apply(lambda x: np.log(x) if x > 0 else np.nan)
+    out["log_i_sum"] = out["i_sum"].apply(lambda x: np.log10(x) if x > 0 else np.nan)
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     outfile = os.path.join(
@@ -109,3 +109,4 @@ def sum_intensities(
     print(out[["merged_precmz", "n_scans", "scan_ids", "i_sum"]].head(10))
 
     return out, outfile
+
