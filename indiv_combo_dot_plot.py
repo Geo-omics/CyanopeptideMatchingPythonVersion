@@ -1,4 +1,4 @@
-#indiv_comobo_dot_plot.py
+#indiv_combo_dot_plot.py
 """
 indiv_combo_dot_plots.py
 
@@ -204,5 +204,6 @@ def plot_combo_scatter(
         plt.close(fig)
 
     return fig, ax, saved_path
+
 
 
