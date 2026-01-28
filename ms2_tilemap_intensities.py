@@ -23,7 +23,7 @@ def find_latest(pattern, what="item"):
 # Load latest indiv_merged_summary_with_intensities_* in latest adduct_outputs_*
 # -----------------------------------------------------
 def load_latest_summary_with_intensities(
-    run_dir_pattern="adduct_outputs_*",
+    run_dir_pattern="Adduct_and_summary_outputs_*",
     summary_basename_pattern="indiv_merged_summary_with_intensities_*.csv",
 ):
     """
@@ -164,4 +164,5 @@ def plot_has_tilemap_from_latest(ion_to_label: dict | None = None):
 
 
     return df, run_dir, summary_file
+
 
