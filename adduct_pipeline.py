@@ -65,6 +65,15 @@ def draw_colored_graph(
         print(f"{title}: graph is empty; nothing to draw.")
         return
 
+    # Skip drawing very large graphs
+    MAX_NODES_TO_DRAW = 400
+    if G.number_of_nodes() > MAX_NODES_TO_DRAW:
+        print(
+            f"{title}: graph has {G.number_of_nodes()} nodes (>{MAX_NODES_TO_DRAW}); "
+            "skipping plot."
+        )
+        return
+
     pos = nx.spring_layout(G, seed=20, k=k)
     plt.figure(figsize=(12, 10))
     nx.draw(
@@ -88,6 +97,7 @@ def draw_colored_graph(
 
     plt.show()
     plt.close()
+
 
 
 # =========================
@@ -202,12 +212,12 @@ def run_merged(
 
     if not edges_df.empty:
         # Save CSV of best edges
-        merged_edges_csv = os.path.join(out_dir_ts, f"indiv_merged_edges_{ts}.csv")
+        merged_edges_csv = os.path.join(out_dir_ts, f"indiv_merged_best_edges_{ts}.csv")
         edges_df.to_csv(merged_edges_csv, index=False)
         print(f"Saved merged edges → {os.path.abspath(merged_edges_csv)}")
 
         # Save Excel summary of best edges
-        excel_name = f"parent_adduct_summary_{ts}.xlsx"
+        excel_name = f"parent_adduct_summary_best_edges_{ts}.xlsx"
         excel_path = os.path.join(out_dir_ts, excel_name)
         _save_edges_excel(edges_df, excel_path)
     else:
@@ -317,3 +327,4 @@ def run_per_file(
         graph_title = f"{graph_title_prefix}{base}"
         png = os.path.join(out_dir_ts, f"adduct_graph_{base}_{ts}.png") if save_graph else None
         draw_colored_graph(Gf, title=graph_title, out_png=png)
+
