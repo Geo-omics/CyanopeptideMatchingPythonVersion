@@ -388,3 +388,22 @@ def pool_auc_back_to_matches(perfile_with_auc: pd.DataFrame) -> pd.DataFrame:
     )
     return pooled
 
+#extract date time from the MS1 points generated
+import re
+from datetime import datetime
+from pathlib import Path
+def extract_created_time(path: Path) -> datetime:
+    """
+    Extract datetime from:
+    ms1_points_YYYY-MM-DD_HH-MM-SS.csv
+    """
+    match = re.search(
+        r"ms1_points_(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})",
+        path.name,
+    )
+    if not match:
+        raise ValueError(f"[ERROR] Invalid MS1 filename format: {path.name}")
+
+    date_part, time_part = match.groups()
+    timestamp_str = f"{date_part} {time_part.replace('-', ':')}"
+    return datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
