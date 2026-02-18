@@ -108,6 +108,7 @@ def plot_heatmaps(
             print(f"Saved figure → {out_path}")
 
         plt.show()
+        plt.close()
 
     # Plot merged
     if merged:
@@ -128,6 +129,7 @@ def plot_heatmaps(
                 f"File: {os.path.basename(f)}",
                 tag,
             )
+
 
 
 
