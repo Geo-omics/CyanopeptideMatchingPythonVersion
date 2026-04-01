@@ -5,6 +5,53 @@ import math
 import pandas as pd
 from massql import msql_engine, msql_fileloading
 
+
+# -------------------------------------------------------------------------------------------
+#Keep only ms2 spectra that belong to features retained in ms1 feature table
+# -------------------------------------------------------------------------------------------
+def _filter_ms2_df_to_kept_features(
+    ms2_df: pd.DataFrame,
+    kept_feats: Optional[pd.DataFrame],
+    *,
+    mz_tol_da: float = 0.2,
+    rt_tol_min: float = 0.3,
+    ms2_precursor_col: str = "precmz",
+    ms2_rt_col: str = "rt",
+) -> pd.DataFrame:
+    """
+    Feature-aware MS2 restriction:
+    keep only MS2 rows whose (precmz, rt) match any kept feature (merged_precmz, rt_median)
+    within tolerances.
+
+    Requires kept_feats columns: merged_precmz, rt_median
+    """
+    if ms2_df is None or ms2_df.empty:
+        return ms2_df
+    if kept_feats is None or len(kept_feats) == 0:
+        return ms2_df  # no filter applied
+
+    if ms2_precursor_col not in ms2_df.columns or ms2_rt_col not in ms2_df.columns:
+        # Can't filter if columns aren't present
+        return ms2_df
+
+    if "merged_precmz" not in kept_feats.columns or "rt_median" not in kept_feats.columns:
+        return ms2_df
+
+    ms2_prec = ms2_df[ms2_precursor_col].astype(float).to_numpy()
+    ms2_rt = ms2_df[ms2_rt_col].astype(float).to_numpy()
+
+    kept_mz = kept_feats["merged_precmz"].astype(float).to_numpy()
+    kept_rt = kept_feats["rt_median"].astype(float).to_numpy()
+
+    keep_mask = np.zeros(len(ms2_df), dtype=bool)
+    for mz0, rt0 in zip(kept_mz, kept_rt):
+        keep_mask |= (
+            (ms2_prec >= (mz0 - mz_tol_da)) & (ms2_prec <= (mz0 + mz_tol_da)) &
+            (ms2_rt >= (rt0 - rt_tol_min)) & (ms2_rt <= (rt0 + rt_tol_min))
+        )
+
+    return ms2_df.loc[keep_mask].copy()
+
 # -------------------------------------------------------------------------------------------
 # Load a single file
 def load_file(input_file: str):
