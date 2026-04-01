@@ -36,6 +36,7 @@ def plot_precursor_rt(df, ion_to_label=None, ax=None, save=False, out_dir="."):
 
     if save:
         import datetime
+        os.makedirs(out_dir, exist_ok=True)
         ts = datetime.datetime.now().strftime("%y-%m-%d_%H-%M-%S")
         out_path = os.path.join(out_dir, f"Precursor_rt_plot_{ts}.png")
         fig.savefig(out_path, dpi=300)
