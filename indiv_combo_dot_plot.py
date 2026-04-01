@@ -2,19 +2,9 @@
 """
 indiv_combo_dot_plots.py
 
-Two plotting utilities + a simple CLI for:
-  1) Individual diagnostic-ion presence per precursor (indiv summary)
-  2) Combo diagnostic-ion presence per precursor (combo summary)
-
-
-
-  # Only the individual plot, show it on screen
-  python indiv_combo_plots.py --indiv indiv_summary.csv
-
 As a module:
   from indiv_combo_plots import plot_indiv_scatter, plot_combo_scatter
   fig, ax, path = plot_indiv_scatter(indiv_df, out_dir="plots")
-  fig, ax, path = plot_combo_scatter(combo_df, out_dir="plots")
 """
 from __future__ import annotations
 
