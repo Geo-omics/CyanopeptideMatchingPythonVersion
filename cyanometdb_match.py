@@ -36,12 +36,12 @@ except Exception:
 MS1_BASE_KEEP: Sequence[str] = (
     "cluster_id",
     "merged_precmz",
-    "n_scans",        # <-- added
-    "scan_nunique",   # keep if your summaries use this name
-    "scan_ids",       # <-- added
-    "ms1_scan_ids",   # <-- added
-    "files",          # <-- added
-    "source_file_<lambda>",  # some summaries use this field name instead of 'files'
+    "n_scans",        
+    "scan_nunique",   
+    "scan_ids",      
+    "ms1_scan_ids",   
+    "files",          
+    "source_file_<lambda>", 
     "rt_min",
     "rt_median",
     "rt_max",
