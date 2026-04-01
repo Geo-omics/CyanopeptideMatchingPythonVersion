@@ -68,24 +68,14 @@ def load_metadata(cfg: QCConfig) -> Optional[pd.DataFrame]:
     return meta
 
 
-def load_latest_ms1_points(ms1_points_dir: str = "MS1_points") -> pd.DataFrame:
-    d = Path(ms1_points_dir)
-    if not d.exists():
-        raise FileNotFoundError(f"[ERROR] MS1 points folder not found: {d.resolve()}")
+def load_ms1_points(ms1_points_file: str) -> pd.DataFrame:
+    p = Path(ms1_points_file)
 
-    candidates = list(d.glob("ms1_points_*.csv"))
-    if not candidates:
-        raise FileNotFoundError(f"[ERROR] No ms1_points_*.csv in {d.resolve()}")
+    if not p.exists():
+        raise FileNotFoundError(f"[ERROR] MS1 points file not found: {p.resolve()}")
 
-    # newest by filename timestamp if you use your extract_created_time helper; else mtime
-    try:
-        from summary_builder import extract_created_time
-        pick = max(candidates, key=extract_created_time)
-    except Exception:
-        pick = max(candidates, key=lambda p: p.stat().st_mtime)
-
-    print("[INFO] Using MS1 points file:", pick.resolve())
-    ms1_points = pd.read_csv(pick)
+    print("[INFO] Using MS1 points file:", p.resolve())
+    ms1_points = pd.read_csv(p)
 
     # normalize basenames
     if "source_file" in ms1_points.columns:
@@ -100,8 +90,8 @@ def load_latest_ms1_points(ms1_points_dir: str = "MS1_points") -> pd.DataFrame:
     for c in ["precmz", "rt", "i"]:
         if c in ms1_points.columns:
             ms1_points[c] = pd.to_numeric(ms1_points[c], errors="coerce")
-    return ms1_points
 
+    return ms1_points
 
 # -----------------------------
 # Reference AUC
