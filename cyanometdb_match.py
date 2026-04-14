@@ -1,52 +1,50 @@
+
 #!/usr/bin/env python3
 """
 cyanometdb_match.py
 
-- Match MS1 summaries to CyanometDB entries by precursor m/z within a tolerance.
-- Second Excel sheet for unmatched rows that have >=2 diagnostic "has_ " flags
-- CSV export and a heatmap PNG for those unknowns
-- Safe Excel engine fallback (xlsxwriter -> openpyxl)
+- Match MS1 summaries to CyanometDB entries by precursor m/z within a tolerance
+- Build an "unknowns" sheet for rows with no library hit and >=2 diagnostic has_* flags
+- Export CSV / Excel / optional unknowns heatmap PNG
 """
 
 from __future__ import annotations
 
-import argparse
-import glob
 import os
 from pathlib import Path
 from datetime import datetime
 from typing import Iterable, Optional, Sequence
+
 import matplotlib.pyplot as plt
-from matplotlib import cm
+import matplotlib.cm as cm
 import matplotlib.patches as mpatches
 import numpy as np
 import pandas as pd
 
-# Optional for heatmap; only imported when plotting
+# Optional for unknowns heatmap
 try:
     import seaborn as sns  # type: ignore
     _HAS_SNS = True
 except Exception:
     _HAS_SNS = False
 
+
 # --------------------
 # Defaults / constants
 # --------------------
-# Keep core metadata + scan/file provenance; all "has_*" columns are added dynamically
 MS1_BASE_KEEP: Sequence[str] = (
     "cluster_id",
     "merged_precmz",
-    "n_scans",        
-    "scan_nunique",   
-    "scan_ids",      
-    "ms1_scan_ids",   
-    "files",          
-    "source_file_<lambda>", 
+    "n_scans",
+    "scan_nunique",
+    "scan_ids",
+    "ms1_scan_ids",
+    "files",
+    "source_file_<lambda>",
     "rt_min",
     "rt_median",
     "rt_max",
 )
-
 
 LIB_MZ_COL = "Monoisotopic mass [M+H]+"
 MS1_MZ_COL = "merged_precmz"
@@ -66,6 +64,7 @@ def read_any_table(path: str | os.PathLike) -> pd.DataFrame:
     if suf == ".parquet":
         return pd.read_parquet(p)
     raise ValueError(f"Unsupported table format: {p.suffix}")
+
 
 # --------------------
 # Library loading
