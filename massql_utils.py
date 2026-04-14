@@ -2,6 +2,7 @@
 from typing import List, Tuple, Dict, Iterable, Optional
 import os
 import math
+import numpy as np
 import pandas as pd
 from massql import msql_engine, msql_fileloading
 
