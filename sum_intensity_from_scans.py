@@ -2,13 +2,13 @@
 """
 sum_intensity_from_scans.py
 
-- Find latest indiv_merged_summary_*.csv and individual_hits_*.csv
 - Explode scan_ids into individual scans
 - Join MS2 intensity ("i") from hits file
 - Sum intensity per MS1 feature
 - Save output with timestamp
 - Provides an importable function: sum_intensities()
 """
+
 import pandas as pd
 import numpy as np
 import glob
@@ -79,3 +79,4 @@ def sum_intensities(summary_file, hits_file, output_dir=None):
     print(out[["merged_precmz", "n_scans", "scan_ids", "i_sum"]].head(10))
 
     return out, outfile
+
