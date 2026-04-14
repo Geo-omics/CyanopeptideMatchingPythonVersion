@@ -2,8 +2,8 @@
 """
 cyanopeptide_counts_plots.py
 
-Plot bar charts of diagnostic ion counts (individual cyanopeptide labels and combo MP labels)
-by source_file, with graceful skipping if inputs are empty or missing.
+Plot bar charts of diagnostic ion counts (individual cyanopeptide labels)
+by source_file, with skipping if inputs are empty or missing.
 
 Features:
 - Works as a module (import functions and pass DataFrames)
@@ -63,7 +63,7 @@ def plot_indiv_counts(
     *,
     label_col: Optional[str] = None,
     out_dir: str = ".",
-    show: bool = True,
+    show: bool = False,
 ) -> Tuple[Optional[str], Optional[str]]:
 
     if ind_hits_l is None or ind_hits_l.empty:
@@ -151,7 +151,7 @@ def plot_combo_counts(
     *,
     label_col: str = "MP_combo",
     out_dir: str = ".",
-    show: bool = True,
+    show: bool = False,
 ) -> Tuple[Optional[str], Optional[str]]:
     """
     Plot bar charts for combo diagnostic ions (MP_combo) by file.
