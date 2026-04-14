@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+
 def plot_has_tilemap(summary_file, output_dir=None, ion_to_label=None):
     """
     Make a tile map where:
@@ -113,6 +114,6 @@ def plot_has_tilemap(summary_file, output_dir=None, ion_to_label=None):
     fig.savefig(out_path, dpi=300, bbox_inches="tight")
     print(f"Saved figure → {out_path}")
 
-    plt.show()
+    plt.close()
 
     return df, output_dir, summary_file, out_path
