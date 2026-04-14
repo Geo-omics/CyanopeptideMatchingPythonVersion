@@ -8,7 +8,8 @@ from typing import Optional, Tuple, List
 
 import numpy as np
 import pandas as pd
-
+import re
+import shutil
 
 # -----------------------------
 # Config
@@ -177,6 +178,7 @@ def add_reference_normalization(
 # -----------------------------
 # Batch correction (downstream-only)
 # -----------------------------
+
 def apply_batch_correction_median_scaling(
     perfile_df: pd.DataFrame,
     metadata: Optional[pd.DataFrame],
@@ -188,6 +190,9 @@ def apply_batch_correction_median_scaling(
     Median scaling across batches on intensity_col.
     Factors computed using non-blank files only if cfg.batch_use_nonblank_only=True.
     """
+    print("[DEBUG] entered apply_batch_correction_median_scaling")
+    print("[DEBUG] perfile_df columns:", perfile_df.columns.tolist())
+    print("[DEBUG] has batch?", "batch" in perfile_df.columns)
     if (not cfg.apply_batch_correction) or (metadata is None):
         return perfile_df
 
@@ -206,6 +211,11 @@ def apply_batch_correction_median_scaling(
 
     df = perfile_df.copy()
     df["source_file"] = df["source_file"].astype(str).str.strip().apply(lambda x: Path(x).name)
+
+    for col in [cfg.batch_col, cfg.blank_col]:
+        if col in df.columns:
+            print(f"[DEBUG] dropping existing '{col}' before metadata merge")
+            df = df.drop(columns=[col])
 
     df = df.merge(meta[[key, cfg.batch_col] + ([cfg.blank_col] if cfg.blank_col in meta.columns else [])],
                   left_on="source_file", right_on=key, how="left")
@@ -354,7 +364,7 @@ def save_qc_audit(
         print("[DONE] wrote:", clean_path)
 
     if keep_table is not None and (not keep_table.empty):
-        keep_path = d / f"{tag}_blank_keep_features_{ts}.csv"
+        keep_path = d / f"{tag}_keep_features_{ts}.csv"
         keep_table.to_csv(keep_path, index=False)
         print("[DONE] wrote:", keep_path)
 
@@ -469,8 +479,10 @@ def blank_filter_perfile_table_by_batch(
     filtered = df.merge(keep_table, on=group_cols, how="inner")
     after = len(filtered)
 
-    filtered = filtered.drop(columns=[c for c in [key, cfg.blank_col] if c in filtered.columns], errors="ignore")
-
+    filtered = filtered.drop(
+        columns=[c for c in [key, cfg.blank_col, cfg.batch_col] if c in filtered.columns],
+        errors="ignore"
+)
     print(
         f"[INFO] Batch-aware blank filter applied — rows {before} -> {after}, "
         f"kept feature×batch={len(keep_table)}, removed feature×batch={len(removed_table)}"
@@ -514,3 +526,68 @@ def compute_removed_table(
          .reset_index(drop=True)
     )
     return removed
+
+
+
+
+def flatten_subfolders(run_dir: str | Path, remove_empty: bool = True):
+    """
+    Merge files from timestamped sibling folders into their base folder.
+
+    Handles names like:
+      Adduct_and_summary_outputs_26-04-12_15-53-43
+      Adduct_and_summary_outputs_2026-04-12_15-53-43
+      CyanoMetDB_matches_out_2026-04-12_15-53-43_RAW
+      CyanoMetDB_matches_out_2026-04-12_15-53-43_CLEAN
+    """
+    run_dir = Path(run_dir)
+
+    if not run_dir.exists():
+        print(f"[INFO] merge step skipped; run_dir not found: {run_dir}")
+        return
+
+    folders = [p for p in run_dir.iterdir() if p.is_dir()]
+
+    for dup_dir in folders:
+        name = dup_dir.name
+
+        m = re.match(
+            r"^(.*)_(\d{2,4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})(?:_(RAW|CLEAN))?$",
+            name,
+        )
+        if not m:
+            continue
+
+        base_name = m.group(1)
+        base_dir = run_dir / base_name
+
+        if not base_dir.exists() or base_dir == dup_dir:
+            continue
+
+        print(f"[INFO] Merging:")
+        print(f"       from: {dup_dir}")
+        print(f"         to: {base_dir}")
+
+        for item in dup_dir.iterdir():
+            dest = base_dir / item.name
+
+            if dest.exists():
+                stem = dest.stem
+                suffix = dest.suffix
+                k = 1
+                while True:
+                    alt = base_dir / f"{stem}_dup{k}{suffix}"
+                    if not alt.exists():
+                        dest = alt
+                        break
+                    k += 1
+
+            shutil.move(str(item), str(dest))
+            print(f"       moved: {item.name} -> {dest.name}")
+
+        if remove_empty:
+            try:
+                dup_dir.rmdir()
+                print(f"       removed empty folder: {dup_dir}")
+            except OSError:
+                print(f"       folder not empty, kept: {dup_dir}")
