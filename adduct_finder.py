@@ -1,5 +1,5 @@
 # adduct_finder.py
-# Lightweight adduct / neutral-loss linker for merged precursor tables.
+#Adduct / neutral-loss linker for merged precursor tables.
 #detects adducts and losses by linking precursor features with m/z mass shifts
 #builds network of related ions and plots to visualize precursor families 
 
@@ -233,5 +233,7 @@ def plot_graph(
     plt.axis("off")
     plt.title(title)
     plt.tight_layout()
-
-    plt.show()
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=300, bbox_inches="tight")
+    plt.close()
+  
