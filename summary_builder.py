@@ -27,6 +27,47 @@ def compress_scan_ids(ids, compress=True, force_text=True):
         return "'" + out if out and not out.startswith("'") else out
     return out
 
+def make_scan_level_has_table(
+    hits: pd.DataFrame,
+    *,
+    label_col: str,
+    expected_labels: list[str],
+) -> pd.DataFrame:
+    df = hits.copy()
+
+    key_cols = [c for c in ["source_file", "scan", "ms1scan", "rt", "precmz", "charge"] if c in df.columns]
+
+    # one row per scan, one column per class-specific label
+    out = (
+        df.assign(value=True)
+          .pivot_table(
+              index=key_cols,
+              columns=label_col,
+              values="value",
+              aggfunc="max",
+              fill_value=False,
+          )
+          .reset_index()
+    )
+
+    out.columns.name = None
+
+    # rename label columns to has_<label>
+    rename_map = {lab: f"has_{lab}" for lab in expected_labels if lab in out.columns}
+    out = out.rename(columns=rename_map)
+
+    # ensure ALL expected class-specific has_* columns exist
+    expected_has_cols = [f"has_{lab}" for lab in expected_labels]
+    for c in expected_has_cols:
+        if c not in out.columns:
+            out[c] = False
+
+    # order columns
+    front = key_cols
+    rest = [c for c in expected_has_cols if c in out.columns]
+    out = out[front + rest]
+
+    return out
 
 def _decimals_from_tol(tol: float) -> int:
     """Infer number of decimal places to round to (e.g., 0.01 -> 2)."""
@@ -35,23 +76,46 @@ def _decimals_from_tol(tol: float) -> int:
     return max(0, int(round(-math.log10(tol))))
 
 
-def assign_mz_clusters(mz: pd.Series, tol: float) -> pd.Series:
+def assign_feature_clusters(
+    mz: pd.Series,
+    rt: pd.Series,
+    charge: pd.Series,
+    mz_tol: float,
+    rt_tol: float,
+) -> pd.Series:
     """
-    Assign cluster IDs to m/z values using a simple sorted "chaining" rule:
-    start a new cluster when the gap from the previous value exceeds tol.
+    Cluster features using BOTH m/z and RT tolerance.
+    A new cluster starts if either mz OR RT difference is too large.
     """
-    order = mz.sort_values().index
-    clusters = pd.Series(index=mz.index, dtype=int)
+    df = pd.DataFrame({
+        "mz": mz,
+        "rt": rt,
+        "charge": charge,
+    })
 
+    clusters = pd.Series(index=df.index, dtype=int)
     current = 0
-    last_mz = None
 
-    for i in order:
-        val = mz.loc[i]
-        if last_mz is None or abs(val - last_mz) > tol:
-            current += 1
-        clusters.loc[i] = current
-        last_mz = val
+    for ch, sub in df.groupby("charge", sort=False):
+        sub = sub.sort_values(["mz", "rt"])
+
+        last_mz = None
+        last_rt = None
+
+        for idx, row in sub.iterrows():
+            mz_val = row["mz"]
+            rt_val = row["rt"]
+
+            if (
+                last_mz is None
+                or abs(mz_val - last_mz) > mz_tol
+                or abs(rt_val - last_rt) > rt_tol
+            ):
+                current += 1
+
+            clusters.loc[idx] = current
+            last_mz = mz_val
+            last_rt = rt_val
 
     return clusters
 
@@ -59,6 +123,7 @@ def assign_mz_clusters(mz: pd.Series, tol: float) -> pd.Series:
 def make_summary_ind(
     df: pd.DataFrame,
     merge_tol_mz: float = 0.01,
+    merge_tol_rt: float = 0.2,
     *,
     compress_scans: bool = False,
     force_text: bool = True,
@@ -102,13 +167,16 @@ def make_summary_ind(
         )
 
     # ---- TRUE tolerance clustering on precursor m/z, separately within each charge ----
-    df["_mz_cluster"] = (
-        df.groupby("charge", group_keys=False)["precmz"]
-        .apply(lambda s: assign_mz_clusters(s, merge_tol_mz))
+    df["_feature_cluster"] = assign_feature_clusters(
+        mz=df["precmz"],
+        rt=df["rt"],
+        charge=df["charge"],
+        mz_tol=merge_tol_mz,
+        rt_tol=merge_tol_rt,
     )
 
     # Group by cluster + charge
-    grouped = df.groupby(["_mz_cluster", "charge"], as_index=False)
+    grouped = df.groupby(["_feature_cluster", "charge"], as_index=False)
 
     def collect_info(sub: pd.DataFrame) -> pd.Series:
         return pd.Series(
@@ -136,7 +204,7 @@ def make_summary_ind(
 
     # Presence/absence flags per ion_label PER (cluster, charge)
     presence = (
-        df.groupby(["_mz_cluster", "charge", "ion_label"])["scan"]
+        df.groupby(["_feature_cluster", "charge", "ion_label"])["scan"]
         .size()
         .unstack(fill_value=0)
         .astype(bool)
@@ -144,7 +212,7 @@ def make_summary_ind(
     )
 
     # Rename columns to has_<ion_label>
-    base_cols = ["_mz_cluster", "charge"]
+    base_cols = ["_feature_cluster", "charge"]
     new_cols = base_cols + [
         f"has_{c}" for c in presence.columns if c not in base_cols
     ]
@@ -152,8 +220,8 @@ def make_summary_ind(
 
     # Merge presence flags back; drop helper col
     summary = (
-        summary.merge(presence, on=["_mz_cluster", "charge"], how="left")
-        .drop(columns=["_mz_cluster"])
+        summary.merge(presence, on=["_feature_cluster", "charge"], how="left")
+        .drop(columns=["_feature_cluster"])
     )
 
     print(f"make_summary_ind: {len(summary)} merged precursors from {len(df)} rows")
