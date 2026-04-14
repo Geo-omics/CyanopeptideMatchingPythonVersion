@@ -1,11 +1,10 @@
 # adduct_pipeline.py
 """
-Helpers to:
   - summarize (via your make_summary_ind)
   - detect adducts (via af.detect_adducts)
   - color/draw graphs
   - save CSVs and PNGs with timestamped names (yy-mm-dd_HH-MM-SS)
-  - export cleaned edges to Excel (renames 'expected' -> 'expected_dmz' and reorders columns)
+  - export cleaned edges to Excel 
 
 NOTE: This module purposely does NOT filter. Do any m/z or RT filtering in your notebook
 before calling these functions (pass a pre-filtered DataFrame).
@@ -95,7 +94,7 @@ def draw_colored_graph(
         plt.savefig(out_png, dpi=300, bbox_inches="tight", facecolor="white")
         print(f"Saved graph → {os.path.abspath(out_png)}")
 
-    plt.show()
+   # plt.show()
     plt.close()
 
 
@@ -327,4 +326,3 @@ def run_per_file(
         graph_title = f"{graph_title_prefix}{base}"
         png = os.path.join(out_dir_ts, f"adduct_graph_{base}_{ts}.png") if save_graph else None
         draw_colored_graph(Gf, title=graph_title, out_png=png)
-
