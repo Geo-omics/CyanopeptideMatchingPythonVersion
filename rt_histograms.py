@@ -1,4 +1,3 @@
-#rt_histograms.py
 #!/usr/bin/env python3
 """
 rt_histograms.py
