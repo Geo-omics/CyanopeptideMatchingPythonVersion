@@ -1,4 +1,4 @@
-# rt_mz_plot_min.py
+# rt_mz_plot.py
 import os, colorsys, numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import colors as mcolors
@@ -15,7 +15,14 @@ def make_cmap(base_hue: float):
         ]
     return cmap
 
-def plot_precursor_rt(df, ion_to_label=None, ax=None, save=False, out_dir="."):
+def plot_precursor_rt(df, ion_to_label=None, ax=None, save=False, out_dir=".", show=False):
+    print("[DEBUG] entered plot_precursor_rt")
+    print(f"[DEBUG] save={save}")
+    print(f"[DEBUG] out_dir={out_dir}")
+    print(f"[DEBUG] df empty? {df.empty}")
+    print(f"[DEBUG] df columns: {list(df.columns)}")
+    print(f"[DEBUG] nrows={len(df)}")
+
     fig, ax = (plt.subplots(figsize=(10,6)) if ax is None else (ax.figure, ax))
     markers = ["o","^","s","D","x","*"]
     files = df["source_file"].unique().tolist()
@@ -38,9 +45,12 @@ def plot_precursor_rt(df, ion_to_label=None, ax=None, save=False, out_dir="."):
         import datetime
         os.makedirs(out_dir, exist_ok=True)
         ts = datetime.datetime.now().strftime("%y-%m-%d_%H-%M-%S")
-        out_path = os.path.join(out_dir, f"Precursor_rt_plot_{ts}.png")
-        fig.savefig(out_path, dpi=300)
+        out_path = os.path.abspath(os.path.join(out_dir, f"Precursor_rt_plot_{ts}.png"))
+        print(f"[DEBUG] trying to save to: {out_path}")
+        fig.savefig(out_path, dpi=300, bbox_inches="tight")
         print(f"Saved figure → {out_path}")
+    if not show:
+        plt.close(fig)
 
     return fig, ax
 
@@ -79,6 +89,6 @@ def plot_per_file_legend(df, save=False, out_dir="."):
         plt.savefig(out_path, dpi=300)
         print(f"Saved figure → {out_path}")
 
-    plt.show()
+    plt.close()
 
 
