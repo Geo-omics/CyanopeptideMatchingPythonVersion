@@ -1,6 +1,8 @@
 # summary_builder.py
 import math
 import pandas as pd
+from pathlib import Path
+import numpy as np
 
 
 def compress_scan_ids(ids, compress=True, force_text=True):
@@ -229,67 +231,13 @@ def make_summary_ind(
 
 
 
-def make_summary_combo(df: pd.DataFrame, merge_tol_mz: float = 0.01) -> pd.DataFrame:
-    """
-    Summarize hits by precursor m/z within tolerance AND ion_label identity.
-    Keeps track of files and scans that contributed to each precursor.
-    """
-
-    if df.empty:
-        print("Input dataframe is empty, returning unchanged.")
-        return df
-
-    # Round precursors to a bin so "close enough" precursors merge
-    df = df.copy()
-    df["_mz_bin"] = df["precmz"].round(2)  # adjust precision if needed
-
-    # Group by m/z bin + ion identity + charge
-    grouped = df.groupby(["_mz_bin", "combo_label", "charge"], as_index=False)
-
-    def collect_info(sub):
-        return pd.Series({
-            "merged_precmz": sub["precmz"].mean(),
-            "rt_min": sub["rt"].min(),
-            "rt_median": sub["rt"].median(),
-            "rt_max": sub["rt"].max(),
-            "n_scans": sub["scan"].nunique(),
-            "scan_ids": ",".join(map(str, sorted(sub["scan"].unique()))),
-            "files": ",".join(sorted(sub["source_file"].unique())),
-        })
-
-    summary_combo = grouped.apply(collect_info).reset_index(drop=True)
-
-    # Add presence/absence flags per combo_label
-    presence = (
-        df.groupby(["_mz_bin", "combo_label"])["scan"]
-          .size().unstack(fill_value=0).astype(bool).reset_index()
-    )
-    presence.columns = ["_mz_bin"] + [f"has_{c}" for c in presence.columns if c != "_mz_bin"]
-
-    # Merge presence flags back (safe, no cluster_id needed)
-    summary_combo_merge = summary_combo.merge(presence, on="_mz_bin", how="left")
-
-    # Drop helper col
-    summary_combo_merge = summary_combo_merge.drop(columns=["_mz_bin"])
-
-    print(f"make_summary_combo: {len(summary_combo_merge)} merged precursors from {len(df)} rows")
-    print(summary_combo_merge.head())
-
-    return summary_combo_merge
-
-#01/04/2025: added this to calculate auc of each metabolite
-#01/04/2025: MS1 AUC per metabolite + per-file normalization + multi-file pooled sum
-# --- MS1 AUC from MS1-point-table CSV (no mzML reread) ---
+# --- MS1 AUC from MS1-point-table CSV---
 # Uses your extracted MS1 point table:
 #   columns: source_file, scan, rt, precmz, i, mslevel, polarity
 # And your matches table:
 #   columns: merged_precmz, rt_min, rt_max, files (comma-separated mzML basenames)
 #
 # Output: per-file exploded matches + ms1_auc per row (and optional pooled sums)
-
-from pathlib import Path
-import numpy as np
-import pandas as pd
 
 
 # ---------------- helpers ----------------
@@ -437,7 +385,7 @@ def add_ms1_auc_from_points(
     return out
 
 
-# ---------------- optional: pooled sum back to match-level ----------------
+# ---------------- pooled sum back to match-level ----------------
 def pool_auc_back_to_matches(perfile_with_auc: pd.DataFrame) -> pd.DataFrame:
     """
     If you want the old 'sum across files' version:
