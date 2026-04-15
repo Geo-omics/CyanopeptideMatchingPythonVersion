@@ -1,5 +1,5 @@
 # adduct_finder.py
-# Lightweight adduct / neutral-loss linker for merged precursor tables.
+#Adduct / neutral-loss linker for merged precursor tables.
 #detects adducts and losses by linking precursor features with m/z mass shifts
 #builds network of related ions and plots to visualize precursor families 
 
@@ -127,9 +127,8 @@ def detect_adducts(
                 exp_dmz = _expected_dmz(dmass, z_i)
                 tol = max(cfg.mz_tol, abs(exp_dmz) * cfg.ppm_tol / 1e6)
                 if abs(dmz - exp_dmz) <= tol:
-                    # ppm sanity check in neutral-mass space around [M+H]+ assumption
-                    Mi = z_i * mz_vals[i] - PROTON
-                    Mj_est = z_i * mz_vals[j] - PROTON
+                    Mi = z_i * mz_vals[i] - z_i * PROTON
+                    Mj_est = z_i * mz_vals[j] - z_i * PROTON
                     ppm_err = _ppm(Mj_est - (Mi + dmass), Mi + dmass)
                     edges.append(
                         (
@@ -234,5 +233,7 @@ def plot_graph(
     plt.axis("off")
     plt.title(title)
     plt.tight_layout()
-
-    plt.show()
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=300, bbox_inches="tight")
+    plt.close()
+  

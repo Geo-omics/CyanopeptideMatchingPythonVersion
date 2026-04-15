@@ -2,8 +2,8 @@
 """
 cyanopeptide_counts_plots.py
 
-Plot bar charts of diagnostic ion counts (individual cyanopeptide labels and combo MP labels)
-by source_file, with graceful skipping if inputs are empty or missing.
+Plot bar charts of diagnostic ion counts (individual cyanopeptide labels)
+by source_file, with skipping if inputs are empty or missing.
 
 Features:
 - Works as a module (import functions and pass DataFrames)
@@ -63,7 +63,7 @@ def plot_indiv_counts(
     *,
     label_col: Optional[str] = None,
     out_dir: str = ".",
-    show: bool = True,
+    show: bool = False,
 ) -> Tuple[Optional[str], Optional[str]]:
 
     if ind_hits_l is None or ind_hits_l.empty:
@@ -145,64 +145,3 @@ def plot_indiv_counts(
 
     return bar_path, stacked_path
 
-
-def plot_combo_counts(
-    combo_hits_l: Optional[pd.DataFrame],
-    *,
-    label_col: str = "MP_combo",
-    out_dir: str = ".",
-    show: bool = True,
-) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Plot bar charts for combo diagnostic ions (MP_combo) by file.
-
-    Returns (bar_path, stacked_path); paths may be None if skipped.
-    """
-    ok, msg = _check_df(combo_hits_l, label_col)
-    if not ok:
-        print(f"No combo diagnostic ions found — {msg}")
-        return None, None
-
-    out_dir = _safe_outdir(out_dir)
-    ts = _timestamp()
-
-    df = combo_hits_l.copy()
-
-    counts = (
-        df.groupby(["source_file", label_col])
-          .size().rename("hits").reset_index()
-    )
-
-    preview = counts.sort_values(["source_file", "hits"], ascending=[True, False]).head(20)
-    print("Top counts (combo):")
-    print(preview)
-
-    pivot = counts.pivot(index=label_col, columns="source_file", values="hits").fillna(0)
-
-    # 1) Unstacked bars
-    ax = pivot.plot(kind="bar", figsize=(12, 6))
-    ax.set_ylabel("Hits")
-    ax.set_title("Counts by cyanopeptide combo/diagnostic ion and file (combo)")
-    plt.tight_layout()
-    bar_path = os.path.join(out_dir, f"Diagnostic_ion_distribution_combo_{ts}.png")
-    plt.savefig(bar_path, dpi=300, bbox_inches="tight", facecolor="white")
-    print(f" Saved combo (unstacked) figure: {os.path.abspath(bar_path)}")
-    if show:
-        plt.show()
-    else:
-        plt.close()
-
-    # 2) Stacked bars
-    ax = pivot.plot(kind="bar", stacked=True, figsize=(12, 6))
-    ax.set_ylabel("Hits")
-    ax.set_title("Counts by cyanopeptide combo/diagnostic ion (files stacked) — combo")
-    plt.tight_layout()
-    stacked_path = os.path.join(out_dir, f"Diagnostic_ion_distribution_combo_stacked_{ts}.png")
-    plt.savefig(stacked_path, dpi=300, bbox_inches="tight", facecolor="white")
-    print(f" Saved combo (stacked) figure: {os.path.abspath(stacked_path)}")
-    if show:
-        plt.show()
-    else:
-        plt.close()
-
-    return bar_path, stacked_path

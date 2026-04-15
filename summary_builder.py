@@ -1,6 +1,8 @@
 # summary_builder.py
 import math
 import pandas as pd
+from pathlib import Path
+import numpy as np
 
 
 def compress_scan_ids(ids, compress=True, force_text=True):
@@ -27,6 +29,47 @@ def compress_scan_ids(ids, compress=True, force_text=True):
         return "'" + out if out and not out.startswith("'") else out
     return out
 
+def make_scan_level_has_table(
+    hits: pd.DataFrame,
+    *,
+    label_col: str,
+    expected_labels: list[str],
+) -> pd.DataFrame:
+    df = hits.copy()
+
+    key_cols = [c for c in ["source_file", "scan", "ms1scan", "rt", "precmz", "charge"] if c in df.columns]
+
+    # one row per scan, one column per class-specific label
+    out = (
+        df.assign(value=True)
+          .pivot_table(
+              index=key_cols,
+              columns=label_col,
+              values="value",
+              aggfunc="max",
+              fill_value=False,
+          )
+          .reset_index()
+    )
+
+    out.columns.name = None
+
+    # rename label columns to has_<label>
+    rename_map = {lab: f"has_{lab}" for lab in expected_labels if lab in out.columns}
+    out = out.rename(columns=rename_map)
+
+    # ensure ALL expected class-specific has_* columns exist
+    expected_has_cols = [f"has_{lab}" for lab in expected_labels]
+    for c in expected_has_cols:
+        if c not in out.columns:
+            out[c] = False
+
+    # order columns
+    front = key_cols
+    rest = [c for c in expected_has_cols if c in out.columns]
+    out = out[front + rest]
+
+    return out
 
 def _decimals_from_tol(tol: float) -> int:
     """Infer number of decimal places to round to (e.g., 0.01 -> 2)."""
@@ -35,23 +78,46 @@ def _decimals_from_tol(tol: float) -> int:
     return max(0, int(round(-math.log10(tol))))
 
 
-def assign_mz_clusters(mz: pd.Series, tol: float) -> pd.Series:
+def assign_feature_clusters(
+    mz: pd.Series,
+    rt: pd.Series,
+    charge: pd.Series,
+    mz_tol: float,
+    rt_tol: float,
+) -> pd.Series:
     """
-    Assign cluster IDs to m/z values using a simple sorted "chaining" rule:
-    start a new cluster when the gap from the previous value exceeds tol.
+    Cluster features using BOTH m/z and RT tolerance.
+    A new cluster starts if either mz OR RT difference is too large.
     """
-    order = mz.sort_values().index
-    clusters = pd.Series(index=mz.index, dtype=int)
+    df = pd.DataFrame({
+        "mz": mz,
+        "rt": rt,
+        "charge": charge,
+    })
 
+    clusters = pd.Series(index=df.index, dtype=int)
     current = 0
-    last_mz = None
 
-    for i in order:
-        val = mz.loc[i]
-        if last_mz is None or abs(val - last_mz) > tol:
-            current += 1
-        clusters.loc[i] = current
-        last_mz = val
+    for ch, sub in df.groupby("charge", sort=False):
+        sub = sub.sort_values(["mz", "rt"])
+
+        last_mz = None
+        last_rt = None
+
+        for idx, row in sub.iterrows():
+            mz_val = row["mz"]
+            rt_val = row["rt"]
+
+            if (
+                last_mz is None
+                or abs(mz_val - last_mz) > mz_tol
+                or abs(rt_val - last_rt) > rt_tol
+            ):
+                current += 1
+
+            clusters.loc[idx] = current
+            last_mz = mz_val
+            last_rt = rt_val
 
     return clusters
 
@@ -59,6 +125,7 @@ def assign_mz_clusters(mz: pd.Series, tol: float) -> pd.Series:
 def make_summary_ind(
     df: pd.DataFrame,
     merge_tol_mz: float = 0.01,
+    merge_tol_rt: float = 0.2,
     *,
     compress_scans: bool = False,
     force_text: bool = True,
@@ -102,13 +169,16 @@ def make_summary_ind(
         )
 
     # ---- TRUE tolerance clustering on precursor m/z, separately within each charge ----
-    df["_mz_cluster"] = (
-        df.groupby("charge", group_keys=False)["precmz"]
-        .apply(lambda s: assign_mz_clusters(s, merge_tol_mz))
+    df["_feature_cluster"] = assign_feature_clusters(
+        mz=df["precmz"],
+        rt=df["rt"],
+        charge=df["charge"],
+        mz_tol=merge_tol_mz,
+        rt_tol=merge_tol_rt,
     )
 
     # Group by cluster + charge
-    grouped = df.groupby(["_mz_cluster", "charge"], as_index=False)
+    grouped = df.groupby(["_feature_cluster", "charge"], as_index=False)
 
     def collect_info(sub: pd.DataFrame) -> pd.Series:
         return pd.Series(
@@ -136,7 +206,7 @@ def make_summary_ind(
 
     # Presence/absence flags per ion_label PER (cluster, charge)
     presence = (
-        df.groupby(["_mz_cluster", "charge", "ion_label"])["scan"]
+        df.groupby(["_feature_cluster", "charge", "ion_label"])["scan"]
         .size()
         .unstack(fill_value=0)
         .astype(bool)
@@ -144,7 +214,7 @@ def make_summary_ind(
     )
 
     # Rename columns to has_<ion_label>
-    base_cols = ["_mz_cluster", "charge"]
+    base_cols = ["_feature_cluster", "charge"]
     new_cols = base_cols + [
         f"has_{c}" for c in presence.columns if c not in base_cols
     ]
@@ -152,8 +222,8 @@ def make_summary_ind(
 
     # Merge presence flags back; drop helper col
     summary = (
-        summary.merge(presence, on=["_mz_cluster", "charge"], how="left")
-        .drop(columns=["_mz_cluster"])
+        summary.merge(presence, on=["_feature_cluster", "charge"], how="left")
+        .drop(columns=["_feature_cluster"])
     )
 
     print(f"make_summary_ind: {len(summary)} merged precursors from {len(df)} rows")
@@ -161,67 +231,13 @@ def make_summary_ind(
 
 
 
-def make_summary_combo(df: pd.DataFrame, merge_tol_mz: float = 0.01) -> pd.DataFrame:
-    """
-    Summarize hits by precursor m/z within tolerance AND ion_label identity.
-    Keeps track of files and scans that contributed to each precursor.
-    """
-
-    if df.empty:
-        print("Input dataframe is empty, returning unchanged.")
-        return df
-
-    # Round precursors to a bin so "close enough" precursors merge
-    df = df.copy()
-    df["_mz_bin"] = df["precmz"].round(2)  # adjust precision if needed
-
-    # Group by m/z bin + ion identity + charge
-    grouped = df.groupby(["_mz_bin", "combo_label", "charge"], as_index=False)
-
-    def collect_info(sub):
-        return pd.Series({
-            "merged_precmz": sub["precmz"].mean(),
-            "rt_min": sub["rt"].min(),
-            "rt_median": sub["rt"].median(),
-            "rt_max": sub["rt"].max(),
-            "n_scans": sub["scan"].nunique(),
-            "scan_ids": ",".join(map(str, sorted(sub["scan"].unique()))),
-            "files": ",".join(sorted(sub["source_file"].unique())),
-        })
-
-    summary_combo = grouped.apply(collect_info).reset_index(drop=True)
-
-    # Add presence/absence flags per combo_label
-    presence = (
-        df.groupby(["_mz_bin", "combo_label"])["scan"]
-          .size().unstack(fill_value=0).astype(bool).reset_index()
-    )
-    presence.columns = ["_mz_bin"] + [f"has_{c}" for c in presence.columns if c != "_mz_bin"]
-
-    # Merge presence flags back (safe, no cluster_id needed)
-    summary_combo_merge = summary_combo.merge(presence, on="_mz_bin", how="left")
-
-    # Drop helper col
-    summary_combo_merge = summary_combo_merge.drop(columns=["_mz_bin"])
-
-    print(f"make_summary_combo: {len(summary_combo_merge)} merged precursors from {len(df)} rows")
-    print(summary_combo_merge.head())
-
-    return summary_combo_merge
-
-#01/04/2025: added this to calculate auc of each metabolite
-#01/04/2025: MS1 AUC per metabolite + per-file normalization + multi-file pooled sum
-# --- MS1 AUC from MS1-point-table CSV (no mzML reread) ---
+# --- MS1 AUC from MS1-point-table CSV---
 # Uses your extracted MS1 point table:
 #   columns: source_file, scan, rt, precmz, i, mslevel, polarity
 # And your matches table:
 #   columns: merged_precmz, rt_min, rt_max, files (comma-separated mzML basenames)
 #
 # Output: per-file exploded matches + ms1_auc per row (and optional pooled sums)
-
-from pathlib import Path
-import numpy as np
-import pandas as pd
 
 
 # ---------------- helpers ----------------
@@ -369,7 +385,7 @@ def add_ms1_auc_from_points(
     return out
 
 
-# ---------------- optional: pooled sum back to match-level ----------------
+# ---------------- pooled sum back to match-level ----------------
 def pool_auc_back_to_matches(perfile_with_auc: pd.DataFrame) -> pd.DataFrame:
     """
     If you want the old 'sum across files' version:

@@ -1,4 +1,3 @@
-#rt_histograms.py
 #!/usr/bin/env python3
 """
 rt_histograms.py
@@ -151,72 +150,6 @@ def plot_rt_histograms(ind_hits_l: pd.DataFrame, labels: Dict[float, str], out_d
     return out_dir
 
 
-def _build_cli():
-    ap = argparse.ArgumentParser(description="Plot RT histograms per file and merged; save figures and Excel with timestamp.")
-    ap.add_argument("input_csv", help="Path to CSV containing columns: rt, ion, source_file (and optionally precmz)")
-    ap.add_argument("--out-dir", default=".", help="Root folder to write outputs (default: current dir)")
-    ap.add_argument("--label-json", default=None, help="Optional JSON mapping of ion (as string/number) -> label, e.g. {'18.0': 'NH4+'}")
-    return ap
-
-
-def main(argv=None) -> int:
-    parser = _build_cli()
-    args = parser.parse_args(argv)
-
-    if not os.path.exists(args.input_csv):
-        parser.error(f"Input CSV not found: {args.input_csv}")
-
-    df = pd.read_csv(args.input_csv)
-
-    required = ["rt", "ion", "source_file"]
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        parser.error(f"Input CSV is missing required columns: {missing}")
-
-    labels = _load_labels(args.label_json)
-    out_dir = plot_rt_histograms(df, labels, args.out_dir)
-    print(f"All outputs written to: {os.path.abspath(out_dir)}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-
-
-import os
-import glob
-import pandas as pd
-
-def load_latest_hits(ind_pattern="individual_hits_*.csv"):
-    """
-    Automatically find and load the most recent individual  hit CSVs.
-
-    Parameters
-    ----------
-    ind_pattern : str, default 'individual_hits_*.csv'
-        Glob pattern for individual hits CSVs.
-    
-
-    Returns
-    -------
-    (ind_hits_l) : tuple of DataFrames
-        Loaded DataFrames for individual  hits.
-    """
-
-    def _latest_file(pattern):
-        files = glob.glob(pattern)
-        if not files:
-            print(f" No files found matching pattern: {pattern}")
-            return None
-        latest = max(files, key=os.path.getctime)
-        print(f"Using latest file: {latest}")
-        return latest
-
-    ind_path = _latest_file(ind_pattern)
-    #combo_path = _latest_file(combo_pattern)
-
-    ind_hits_l = pd.read_csv(ind_path) if ind_path else pd.DataFrame()
-    #combo_hits_l = pd.read_csv(combo_path) if combo_path else pd.DataFrame()
 
     print(f" Loaded {len(ind_hits_l)} individual hits")
     return ind_hits_l

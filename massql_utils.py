@@ -161,7 +161,10 @@ def build_massql_query(
     return f"QUERY scaninfo(MS2DATA) WHERE {where}"
 
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> e63a6cbcc38e06446ad7f31a3f025abf11925045
 # -------------------------------------------------------------------------------------------
 # Run across files (individual ions)
 def run_across_files_individual(
