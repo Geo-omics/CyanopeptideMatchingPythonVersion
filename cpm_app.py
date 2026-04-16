@@ -479,8 +479,8 @@ def render_home_page():
 
         
         **MS1 Points uploaded from mzML tab:** 
-        -If you have already ran analyzes on same files and would like to save time or computer resources, upload a previous MS1 point generated from CPM.
-        -If you have not already ran these SAME files through CPM, please click Extract MS1 mzML values.
+        - If you have already ran analyzes on same files and would like to save time or computer resources, upload a previous MS1 point generated from CPM.
+        - If you have not already ran these SAME files through CPM, please click Extract MS1 mzML values.
 
 
         **Optional reference normalization**
