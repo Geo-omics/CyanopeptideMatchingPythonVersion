@@ -506,8 +506,7 @@ def render_home_page():
 
     with st.expander("Notes about the bundled reference library", expanded=False):
         st.write(
-            "CyanoMetDB is bundled with the app package. Keep `CyanoMetDB_Version03.xlsx` in "
-            "`./data/` or beside this app, and it will be staged automatically for each run."
+            "CyanoMetDB is bundled with the app package. Keep `CyanoMetDB_Version03.xlsx` "
         )
 
     st.info("Use the sidebar to switch to **Run pipeline** when you're ready to analyze mzML files.")
