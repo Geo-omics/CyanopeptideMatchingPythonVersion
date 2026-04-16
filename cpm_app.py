@@ -682,7 +682,9 @@ def render_run_page():
 
         ms1_points_file = None
         if not extract_ms1:
-            ms1_points_file = st.file_uploader("Optional MS1 points CSV", type=["csv"])
+            ms1_points_file = st.file_uploader("Optional MS1 points CSV", type=["csv"],
+            help= "Make sure your uploaded MS1 points were generated from the SAME files using CPM",
+        )
 
     col_run, col_clear = st.columns([3, 1])
     with col_run:
