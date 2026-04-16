@@ -586,6 +586,7 @@ def render_run_page():
                 max_value=100.0,
                 value=DEFAULT_RT_WINDOW[0],
                 step=0.1,
+                help="Filter this for the length of your MS/MS run",
             )
         with col2:
             rt_max = st.number_input(
@@ -594,6 +595,7 @@ def render_run_page():
                 max_value=100.0,
                 value=DEFAULT_RT_WINDOW[1],
                 step=0.1,
+                help= "Filter this for the length of your MS/MS run (max time)",
             )
         with col3:
             tol_da = st.number_input(
@@ -602,6 +604,7 @@ def render_run_page():
                 max_value=5.0,
                 value=DEFAULT_TOL_DA,
                 step=0.0001,
+                help= "Set your tolerance for matching to the CyanoMetDB compounds"
             )
 
         col4, _, _ = st.columns(3)
