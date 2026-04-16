@@ -1,12 +1,12 @@
 streamlit
 massql
-pandas
-seaborn
-openpyxl
+pandas==2.2.2
+seaborn==0.13.2
+openpyxl==3.1.2
 numpy==1.26.4
-matplotlib
+matplotlib==3.8.4
 matchms
 networkx
-pyteomics
+pyteomics==4.7.5
 
 
