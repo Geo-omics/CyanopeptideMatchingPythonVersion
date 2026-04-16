@@ -1,0 +1,12 @@
+streamlit
+massql
+pandas
+seaborn
+openpyxl
+numpy
+matplotlib
+matchms
+networkx
+pyteomics
+
+
