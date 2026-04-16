@@ -910,33 +910,37 @@ def render_run_page():
 
         st.divider()
         st.subheader("Download Results")
-        downloaded = st.download_button(
-            "Download All Outputs (.zip)",
-            data=zip_bytes,
-            file_name=zip_name,
-            mime="application/zip",
-            type="primary",
-            use_container_width=True,
-            key="bottom-download-button",
-        )
-        st.caption("After the first successful click, the ZIP is removed from app memory.")
+
+        if zip_bytes is not None and zip_name is not None:
+            downloaded = st.download_button(
+                "Download All Outputs (.zip)",
+                data=zip_bytes,
+                file_name=zip_name,
+                mime="application/zip",
+                type="primary",
+                use_container_width=True,
+                key="bottom-download-button",
+            )
+            st.caption("After the first successful click, the ZIP is removed from app memory.")
+
+            if downloaded:
+                consume_download()
+                st.rerun()
+        else:
+            st.info("The ZIP has already been removed from memory for this session. Run the pipeline again to generate a new download.")
 
         if run_summary:
             with st.expander("Show packaged folders", expanded=False):
                 for folder in run_summary.get("source_roots", []):
                     st.code(folder)
 
-        if downloaded:
-            consume_download()
-            st.rerun()
+        if inline_log:
+            with st.expander("Run log", expanded=False):
+                st.text(inline_log)
 
-    if inline_log:
-        with st.expander("Run log", expanded=False):
-            st.text(inline_log)
-
-    st.divider()
-    st.subheader("Need help?")
-    st.info("If you see an error or something looks off, contact Sierra Hefferan @sheffera@umich.edu.")
+        st.divider()
+        st.subheader("Need help?")
+        st.info("If you see an error or something looks off, contact Sierra Hefferan @sheffera@umich.edu.")
 
 
 page = st.sidebar.radio("Navigation", ["About this app", "Run pipeline"], index=0)
