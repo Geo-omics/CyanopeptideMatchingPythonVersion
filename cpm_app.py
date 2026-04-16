@@ -586,7 +586,7 @@ def render_run_page():
                 max_value=100.0,
                 value=DEFAULT_RT_WINDOW[0],
                 step=0.1,
-                help="Filter this for the length of your MS/MS run",
+                help="Filter this for the lower bound of your MS/MS run",
             )
         with col2:
             rt_max = st.number_input(
@@ -595,7 +595,7 @@ def render_run_page():
                 max_value=100.0,
                 value=DEFAULT_RT_WINDOW[1],
                 step=0.1,
-                help= "Filter this for the length of your MS/MS run (max time)",
+                help= "Filter this for the upper bound of your MS/MS run",
             )
         with col3:
             tol_da = st.number_input(
