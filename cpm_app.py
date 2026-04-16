@@ -666,7 +666,7 @@ def render_run_page():
 
         st.markdown("**Optional metadata and QC settings**")
         metadata_file = st.file_uploader("Optional metadata CSV", type=["csv"],
-            help= "Make sure you have a column with either source_file or filename and the EXACT match to your .mzML file (EX: MeOH.mzML)",
+            help= "Make sure you have a column with either source_file or filename and the EXACT name for your .mzML file (EX: MeOH.mzML)",
         )
 
 
