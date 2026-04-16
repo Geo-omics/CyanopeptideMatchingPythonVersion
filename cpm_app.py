@@ -477,6 +477,12 @@ def render_home_page():
 
         You can include additional columns for your own recordkeeping.
 
+        
+        **MS1 Points uploaded from mzML tab:** 
+        -If you have already ran analyzes on same files and would like to save time or computer resources, upload a previous MS1 point generated from CPM.
+        -If you have not already ran these SAME files through CPM, please click Extract MS1 mzML values.
+
+
         **Optional reference normalization**
         If you have a reference compound, you can enable reference normalization on the Run page and provide:
         - a reference precursor m/z
@@ -600,7 +606,10 @@ def render_run_page():
 
         col4, _, _ = st.columns(3)
         with col4:
-            extract_ms1 = st.checkbox("Extract MS1 points from uploaded mzML", value=True)
+            extract_ms1 = st.checkbox("Extract MS1 points from uploaded mzML", 
+            value=True,
+            help="Run MS1 extraction UNLESS you have previously generated MS1 points from these SAME mzML files!!"
+        )
 
         use_reference = st.checkbox(
             "Use reference compound normalization",
