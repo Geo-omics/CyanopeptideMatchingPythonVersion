@@ -665,7 +665,10 @@ def render_run_page():
             ref_rt_window = (float(ref_rt_min), float(ref_rt_max))
 
         st.markdown("**Optional metadata and QC settings**")
-        metadata_file = st.file_uploader("Optional metadata CSV", type=["csv"])
+        metadata_file = st.file_uploader("Optional metadata CSV", type=["csv"],
+            help= "Make sure you have a column with either source_file or filename and the EXACT match to your .mzML file (EX: MeOH.mzML)",
+        )
+
 
         do_blank_filter = False
         do_batch_correct = False
