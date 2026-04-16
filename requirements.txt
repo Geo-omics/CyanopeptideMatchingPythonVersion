@@ -3,7 +3,7 @@ massql
 pandas
 seaborn
 openpyxl
-numpy
+numpy==1.26.4
 matplotlib
 matchms
 networkx
