@@ -17,22 +17,8 @@ import re
 import pandas as pd
 import streamlit as st
 
-BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-
-# Temporary workspace for per-run outputs only
-TEMP_BASE = Path(tempfile.gettempdir()) / "cpm_app"
-TEMP_BASE.mkdir(parents=True, exist_ok=True)
-
-# Persistent storage for uploaded inputs
-UPLOAD_DIR = BASE_DIR / "uploaded_mzml"
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
-UPLOAD_META_DIR = BASE_DIR / "uploaded_metadata"
-UPLOAD_META_DIR.mkdir(parents=True, exist_ok=True)
-
-UPLOAD_MS1_DIR = BASE_DIR / "uploaded_ms1_points"
-UPLOAD_MS1_DIR.mkdir(parents=True, exist_ok=True)
+APP_DIR = Path(__file__).resolve().parent
+DATA_DIR = APP_DIR / "data"
 
 POLARITY = "POSITIVE"
 DEFAULT_RT_WINDOW = (2.0, 25.0)
@@ -41,7 +27,6 @@ DEFAULT_TOL_DA = 0.1
 DEFAULT_REF_MZ = 198.135
 DEFAULT_REF_RT_WINDOW = (6.8, 7.2)
 DEFAULT_REF_TOL = 0.01
-MAX_ZIP_MB = 500
 MZML_ID_PATTERN = re.compile(r'id="merged=(\d+)\s+row=\d+"')
 
 
@@ -84,15 +69,55 @@ def patched_print():
 
 
 # -----------------------------
-# Backend + session
+# Save-root helpers
+# -----------------------------
+def get_default_save_root() -> Path:
+    preferred = Path.home() / "Documents" / "CPM_Output"
+    return preferred
+
+
+def normalize_save_root(save_root_text: str) -> Path:
+    text = (save_root_text or "").strip()
+    if not text:
+        return get_default_save_root()
+    return Path(text).expanduser()
+
+
+def get_paths(save_root_text: str) -> dict[str, Path]:
+    root = normalize_save_root(save_root_text)
+    session_id = st.session_state.get("session_id")
+    if not session_id:
+        session_id = uuid.uuid4().hex[:10]
+        st.session_state["session_id"] = session_id
+
+    paths = {
+        "root": root,
+        "uploads": root / "uploads",
+        "metadata": root / "metadata",
+        "ms1_points_uploads": root / "uploaded_ms1_points",
+        "runs": root / "runs",
+        "downloads": root / "zips",
+        "logs": root / "logs",
+        "bundled_data": root / "bundled_data",
+        "session_temp": root / "_session_temp" / session_id,
+    }
+
+    for p in paths.values():
+        p.mkdir(parents=True, exist_ok=True)
+
+    return paths
+
+
+# -----------------------------
+# Backend + library
 # -----------------------------
 @st.cache_resource(show_spinner=False)
 def load_backend_module():
-    candidates = sorted(BASE_DIR.glob("CPM_cli*.py")) + sorted(BASE_DIR.glob("*cli*.py"))
+    candidates = sorted(APP_DIR.glob("CPM_cli*.py")) + sorted(APP_DIR.glob("*cli*.py"))
     if not candidates:
         raise FileNotFoundError(
             "No backend pipeline script found next to the app. "
-            "Place CPM_cli_04_14_2026_test.py beside this Streamlit app."
+            "Place your CPM_cli_*.py file beside this Streamlit app."
         )
     backend_path = candidates[0]
     spec = importlib.util.spec_from_file_location("pipeline_backend", backend_path)
@@ -106,7 +131,7 @@ def load_backend_module():
 
 @st.cache_resource(show_spinner=False)
 def resolve_library_path() -> Path:
-    for p in [DATA_DIR / "CyanoMetDB_Version03.xlsx", BASE_DIR / "CyanoMetDB_Version03.xlsx"]:
+    for p in [DATA_DIR / "CyanoMetDB_Version03.xlsx", APP_DIR / "CyanoMetDB_Version03.xlsx"]:
         if p.exists():
             return p
     raise FileNotFoundError(
@@ -114,21 +139,10 @@ def resolve_library_path() -> Path:
     )
 
 
-def get_session_root() -> Path:
-    if "session_id" not in st.session_state:
-        st.session_state["session_id"] = uuid.uuid4().hex[:10]
-    root = TEMP_BASE / st.session_state["session_id"]
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "runs").mkdir(parents=True, exist_ok=True)
-    (root / "bundled_data").mkdir(parents=True, exist_ok=True)
-    return root
-
-
-def stage_bundled_library(session_root: Path) -> Path:
+def stage_bundled_library(save_root_text: str) -> Path:
     src = resolve_library_path()
-    bundled_dir = session_root / "bundled_data"
-    bundled_dir.mkdir(parents=True, exist_ok=True)
-    staged = bundled_dir / src.name
+    paths = get_paths(save_root_text)
+    staged = paths["bundled_data"] / src.name
     if not staged.exists() or staged.stat().st_size != src.stat().st_size:
         shutil.copy2(src, staged)
     return staged
@@ -138,13 +152,6 @@ def stage_bundled_library(session_root: Path) -> Path:
 # Persistent upload helpers
 # -----------------------------
 def _unique_persistent_path(upload_dir: Path, filename: str, raw_bytes: bytes) -> Path:
-    """
-    Returns a stable path in upload_dir.
-
-    If a file with the same name already exists:
-      - reuse it if bytes are identical
-      - otherwise save as stem_<hash>.suffix
-    """
     upload_dir.mkdir(parents=True, exist_ok=True)
     base_path = upload_dir / filename
 
@@ -152,20 +159,16 @@ def _unique_persistent_path(upload_dir: Path, filename: str, raw_bytes: bytes) -
         return base_path
 
     try:
-        existing = base_path.read_bytes()
-        if existing == raw_bytes:
+        if base_path.read_bytes() == raw_bytes:
             return base_path
     except Exception:
         pass
 
     digest = hashlib.sha1(raw_bytes).hexdigest()[:10]
-    stem = base_path.stem
-    suffix = base_path.suffix
-    return upload_dir / f"{stem}_{digest}{suffix}"
+    return upload_dir / f"{base_path.stem}_{digest}{base_path.suffix}"
 
 
-def save_and_fix_uploaded_mzml(uploaded_file, upload_dir: Path | None = None) -> Path:
-    upload_dir = upload_dir or UPLOAD_DIR
+def save_and_fix_uploaded_mzml(uploaded_file, upload_dir: Path) -> Path:
     raw_bytes = uploaded_file.getvalue()
     out_path = _unique_persistent_path(upload_dir, uploaded_file.name, raw_bytes)
 
@@ -229,8 +232,7 @@ def normalize_pipeline_result(result, output_root: Path) -> tuple[list[Path], li
             key=lambda p: p.stat().st_mtime if p.exists() else 0,
             reverse=True,
         )
-        for p in discovered_run_dirs:
-            roots.append(p)
+        roots.extend(discovered_run_dirs)
 
         for extra in [output_root / "pipeline_log", output_root / "MS1_points"]:
             if extra.exists():
@@ -283,11 +285,11 @@ def collect_output_files_from_result(result, output_root: Path) -> tuple[list[Pa
     return sorted(uniq), roots, explicit_files
 
 
-def make_zip_bytes(paths: list[Path], root: Path) -> bytes:
-    buffer = io.BytesIO()
+def build_zip_on_disk(paths: list[Path], root: Path, zip_path: Path) -> Path:
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
     used_names: set[str] = set()
 
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=3) as zf:
         for path in paths:
             if not path.exists() or not path.is_file():
                 continue
@@ -306,12 +308,7 @@ def make_zip_bytes(paths: list[Path], root: Path) -> bytes:
             used_names.add(arcname_str)
             zf.write(path, arcname=arcname_str)
 
-    return buffer.getvalue()
-
-
-def cleanup_path(path: Path | None) -> None:
-    if path and path.exists():
-        shutil.rmtree(path, ignore_errors=True)
+    return zip_path
 
 
 # -----------------------------
@@ -399,6 +396,7 @@ def build_previews(files: list[Path], class_tag: str) -> dict:
     previews["unknown_features_png"] = load_bytes(
         latest_match(files, prefix="unknown_features_with_scans_", suffix=".png", prefer_contains=["CLEAN", "RAW"])
     )
+
     previews["adduct_graph_png"] = load_bytes(latest_match(files, prefix="adduct_graph_merged_", suffix=".png"))
 
     previews["ind_hits_table"] = load_table_preview(
@@ -418,19 +416,39 @@ def build_previews(files: list[Path], class_tag: str) -> dict:
         head=100,
     )
 
-    counts = {"csv": 0, "excel": 0, "images": 0, "other": 0}
-    for p in files:
-        suf = p.suffix.lower()
-        if suf in {".csv", ".tsv"}:
-            counts["csv"] += 1
-        elif suf in {".xlsx", ".xls"}:
-            counts["excel"] += 1
-        elif suf in {".png", ".jpg", ".jpeg", ".svg", ".pdf"}:
-            counts["images"] += 1
-        else:
-            counts["other"] += 1
-    previews["file_type_counts"] = counts
     return previews
+
+
+def render_all_discovered_outputs(files: list[Path]) -> None:
+    image_suffixes = {".png", ".jpg", ".jpeg"}
+    table_suffixes = {".csv", ".tsv", ".xlsx", ".xls"}
+
+    with st.expander("All discovered output files", expanded=False):
+        for p in files:
+            st.code(str(p))
+
+    for p in files:
+        suffix = p.suffix.lower()
+
+        if suffix in image_suffixes:
+            st.subheader(p.name)
+            try:
+                st.image(str(p))
+            except Exception as exc:
+                st.warning(f"Could not display image {p.name}: {exc}")
+
+        elif suffix in table_suffixes:
+            st.subheader(p.name)
+            try:
+                if suffix == ".csv":
+                    df = pd.read_csv(p)
+                elif suffix == ".tsv":
+                    df = pd.read_csv(p, sep="\t")
+                else:
+                    df = pd.read_excel(p)
+                st.dataframe(df.head(50), use_container_width=True)
+            except Exception as exc:
+                st.warning(f"Could not preview table {p.name}: {exc}")
 
 
 # -----------------------------
@@ -438,58 +456,51 @@ def build_previews(files: list[Path], class_tag: str) -> dict:
 # -----------------------------
 def reset_download_state() -> None:
     for key in [
-        "zip_bytes",
+        "zip_path",
         "zip_name",
         "run_summary",
         "download_status",
         "download_status_detail",
         "download_ready",
         "download_consumed",
-        "run_error",
         "inline_log",
         "previews",
+        "discovered_output_files",
     ]:
         st.session_state.pop(key, None)
 
 
-def clear_session_memory() -> None:
-    """
-    Clears only session-scoped state and temp run folders.
-    Persistent uploaded inputs are preserved.
-    """
-    cleanup_path(TEMP_BASE / st.session_state.get("session_id", ""))
+def clear_session_state_only() -> None:
     reset_download_state()
     for key in ["last_saved_files", "last_metadata_file", "last_ms1_points_file", "session_id"]:
         st.session_state.pop(key, None)
 
 
-def clear_persistent_uploads() -> None:
-    shutil.rmtree(UPLOAD_DIR, ignore_errors=True)
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    st.session_state.pop("last_saved_files", None)
-
-
-def clear_persistent_metadata() -> None:
-    shutil.rmtree(UPLOAD_META_DIR, ignore_errors=True)
-    UPLOAD_META_DIR.mkdir(parents=True, exist_ok=True)
-    st.session_state.pop("last_metadata_file", None)
-
-
-def clear_persistent_ms1_points() -> None:
-    shutil.rmtree(UPLOAD_MS1_DIR, ignore_errors=True)
-    UPLOAD_MS1_DIR.mkdir(parents=True, exist_ok=True)
-    st.session_state.pop("last_ms1_points_file", None)
+def clear_folder_contents(folder: Path) -> None:
+    if not folder.exists():
+        return
+    for item in folder.iterdir():
+        if item.is_dir():
+            shutil.rmtree(item, ignore_errors=True)
+        else:
+            item.unlink(missing_ok=True)
 
 
 def consume_download() -> None:
-    st.session_state["zip_bytes"] = None
+    zip_path = st.session_state.get("zip_path")
+    if zip_path:
+        try:
+            Path(zip_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    st.session_state["zip_path"] = None
     st.session_state["zip_name"] = None
     st.session_state["download_ready"] = False
     st.session_state["download_consumed"] = True
     st.session_state["download_status"] = "downloaded"
     st.session_state["download_status_detail"] = (
-        "Download started. The in-memory ZIP has now been removed from the app session. "
-        "Run the pipeline again if you need another copy."
+        "Download started. The ZIP file was removed from the session download slot."
     )
 
 
@@ -497,111 +508,27 @@ def consume_download() -> None:
 # UI config
 # -----------------------------
 st.set_page_config(page_title="Cyanopeptide Pipeline", layout="wide")
-st.markdown(
-    """
-    <style>
-    div.stDownloadButton > button[kind="primary"] {
-        background-color: #2563eb;
-        border: 1px solid #2563eb;
-        color: white;
-    }
-    div.stDownloadButton > button[kind="primary"]:hover {
-        background-color: #1d4ed8;
-        border-color: #1d4ed8;
-        color: white;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
 
 
 def render_home_page():
     st.title("CPM – Cyanopeptide Metabolomics Pipeline")
-    st.subheader("What this app does")
-
     st.markdown(
         """
-        This application screens LC-MS/MS mzML files for cyanopeptide classes using class-specific
-        diagnostic ions, summarizes precursor features, performs optional QC and blank handling,
-        links related adduct features, and compares putative matches against the bundled
-        CyanoMetDB reference library.
+        This version lets you choose the base output folder inside Streamlit.
 
-        **Workflow overview**
-        1. Upload one or more mzML files.
-        2. Optionally upload a metadata CSV for blank filtering and batch correction.
-        3. Optionally enable reference compound normalization.
-        4. Run the selected cyanopeptide class pipeline.
-        5. Review plots, tables, and annotations on screen.
-        6. Download a ZIP of all generated outputs.
+        Everything is saved under the folder you choose:
+        - uploads
+        - uploaded metadata
+        - uploaded MS1 points
+        - run outputs
+        - ZIP files
+        - staged library copy
         """
     )
-
-    st.caption(
-        "CyanoMetDB reference: Jones MR et al., CyanoMetDB, a comprehensive public "
-        "database of secondary metabolites from cyanobacteria, Water Research 196 "
-        "(2021) 117017. https://doi.org/10.1016/j.watres.2021.117017; "
-        "Janssen et al., 2024, DOI: 10.5281/zenodo.13854577"
-    )
-
-    st.subheader("What the metadata file is for")
-    st.markdown(
-        """
-        The metadata CSV is optional, but recommended when you want blank filtering and/or
-        batch correction. The most useful columns are:
-
-        - `source_file`: exact mzML filename
-        - `sample_type`: for example `sample` or `blank`
-        - `batch`: batch number or batch label
-
-        You can include additional columns for your own recordkeeping.
-
-        **MS1 Points uploaded from mzML tab:**
-        - If you have already ran analyzes on SAME files and would like to save time or computer resources, you can upload a previous MS1 point generated from CPM.
-        - If you have not already ran these SAME files through CPM, please keep "Extract MS1 mzML values" checked!
-
-        **Optional reference normalization**
-        If you have a reference compound, you can enable reference normalization on the Run page and provide:
-        - a reference precursor m/z
-        - a retention time window to search for that compound
-        - an m/z tolerance for matching
-
-        If you do not have a reference compound, leave this section off and the pipeline will skip normalization.
-        """
-    )
-
-    example_meta = pd.DataFrame(
-        [
-            {"source_file": "meoh.mzML", "sample_type": "blank", "batch": 1, "sample_id": "blank_01"},
-            {"source_file": "mp_m2.mzML", "sample_type": "sample", "batch": 1, "sample_id": "sample_01"},
-            {"source_file": "mpbr_ms2.mzML", "sample_type": "sample", "batch": 1, "sample_id": "sample_02"},
-        ]
-    )
-    st.markdown("**Example metadata table**")
-    st.dataframe(example_meta, use_container_width=True)
-    st.download_button(
-        "Download example metadata CSV",
-        data=example_meta.to_csv(index=False).encode("utf-8"),
-        file_name="example_metadata.csv",
-        mime="text/csv",
-        key="example-metadata-download",
-    )
-
-    with st.expander("Notes about the bundled reference library", expanded=False):
-        st.write(
-            "CyanoMetDB is bundled with the app package. Keep `CyanoMetDB_Version03.xlsx` "
-            "in `./data/` or beside this app."
-        )
-
-    st.info("Use the sidebar to switch to **Run pipeline** when you're ready to analyze mzML files.")
 
 
 def render_run_page():
     st.title("CPM – Cyanopeptide Pipeline")
-    st.caption(
-        "Supporting Python modules are bundled with the app. Polarity is fixed to POSITIVE. "
-        "Uploaded input files are stored persistently unless you explicitly clear them."
-    )
 
     try:
         backend, backend_path = load_backend_module()
@@ -610,17 +537,30 @@ def render_run_page():
         st.error(str(exc))
         st.stop()
 
-    session_root = get_session_root()
-    runs_dir = session_root / "runs"
-    staged_library_path = stage_bundled_library(session_root)
+    if "save_root_text" not in st.session_state:
+        st.session_state["save_root_text"] = str(get_default_save_root())
 
-    st.info("CyanoMetDB library is bundled with the app and staged automatically for each run.")
-    with st.expander("Show app resources"):
-        st.caption(f"Bundled library source: {library_path.name}")
+    st.subheader("Save location")
+    save_root_text = st.text_input(
+        "Base folder for uploads, runs, logs, and ZIPs",
+        value=st.session_state["save_root_text"],
+        help="Example: C:\\Users\\you\\Documents\\CPM_Output or D:\\CPM_Output",
+    )
+    st.session_state["save_root_text"] = save_root_text
+
+    try:
+        paths = get_paths(save_root_text)
+    except Exception as exc:
+        st.error(f"Could not create or access that save folder: {exc}")
+        st.stop()
+
+    staged_library_path = stage_bundled_library(save_root_text)
+
+    with st.expander("Current save folders", expanded=False):
+        for k, p in paths.items():
+            st.code(f"{k}: {p}")
         st.caption(f"Backend loaded from: {backend_path.name}")
-        st.caption(f"Persistent mzML upload folder: {UPLOAD_DIR}")
-        st.caption(f"Persistent metadata folder: {UPLOAD_META_DIR}")
-        st.caption(f"Persistent MS1 points folder: {UPLOAD_MS1_DIR}")
+        st.caption(f"Bundled library source: {library_path.name}")
 
     for key, default in {
         "last_saved_files": [],
@@ -631,11 +571,10 @@ def render_run_page():
         "download_ready": False,
         "download_consumed": False,
         "previews": {},
+        "discovered_output_files": [],
     }.items():
         if key not in st.session_state:
             st.session_state[key] = default
-
-    download_status_placeholder = st.container()
 
     class_options = ["MC", "MP", "AR", "AB", "MG"]
     class_tag = st.selectbox(
@@ -653,7 +592,7 @@ def render_run_page():
 
     saved_files: list[Path] = []
     if uploaded_files:
-        saved_files = [save_and_fix_uploaded_mzml(f) for f in uploaded_files]
+        saved_files = [save_and_fix_uploaded_mzml(f, paths["uploads"]) for f in uploaded_files]
         st.session_state["last_saved_files"] = [str(p) for p in saved_files]
         st.success(f"{len(saved_files)} file(s) ready for analysis.")
     elif st.session_state.get("last_saved_files"):
@@ -669,105 +608,37 @@ def render_run_page():
     with st.expander("Analysis settings", expanded=True):
         col1, col2, col3 = st.columns(3)
         with col1:
-            rt_min = st.number_input(
-                "RT min (minutes)",
-                min_value=0.0,
-                max_value=100.0,
-                value=DEFAULT_RT_WINDOW[0],
-                step=0.1,
-                help="Filter this for the lower bound of your MS/MS run",
-            )
+            rt_min = st.number_input("RT min (minutes)", min_value=0.0, max_value=100.0, value=2.0, step=0.1)
         with col2:
-            rt_max = st.number_input(
-                "RT max (minutes)",
-                min_value=0.0,
-                max_value=100.0,
-                value=DEFAULT_RT_WINDOW[1],
-                step=0.1,
-                help="Filter this for the upper bound of your MS/MS run",
-            )
+            rt_max = st.number_input("RT max (minutes)", min_value=0.0, max_value=100.0, value=25.0, step=0.1)
         with col3:
-            tol_da = st.number_input(
-                "CyanoMetDB tolerance (Da)",
-                min_value=0.0001,
-                max_value=5.0,
-                value=DEFAULT_TOL_DA,
-                step=0.0001,
-                help="Set your tolerance for matching to the CyanoMetDB compounds",
-            )
+            tol_da = st.number_input("CyanoMetDB tolerance (Da)", min_value=0.0001, max_value=5.0, value=0.1, step=0.0001)
 
-        col4, _, _ = st.columns(3)
-        with col4:
-            extract_ms1 = st.checkbox(
-                "Extract MS1 points from uploaded mzML",
-                value=True,
-                help="Run MS1 extraction UNLESS you have previously generated MS1 points from these SAME mzML files!!",
-            )
-
-        use_reference = st.checkbox(
-            "Use reference compound normalization",
-            value=False,
-            help="Enable this only if you have a reference compound for normalization.",
-        )
+        extract_ms1 = st.checkbox("Extract MS1 points from uploaded mzML", value=True)
+        use_reference = st.checkbox("Use reference compound normalization", value=False)
 
         ref_mz = None
         ref_tol = DEFAULT_REF_TOL
         ref_rt_window = None
 
         if use_reference:
-            st.markdown("**Reference compound settings**")
             ref_col1, ref_col2, ref_col3 = st.columns(3)
             with ref_col1:
-                ref_mz = st.number_input(
-                    "Reference compound m/z",
-                    min_value=0.0,
-                    value=DEFAULT_REF_MZ,
-                    step=0.0001,
-                    format="%.4f",
-                    help="Reference compound precursor m/z.",
-                )
+                ref_mz = st.number_input("Reference compound m/z", min_value=0.0, value=DEFAULT_REF_MZ, step=0.0001, format="%.4f")
             with ref_col2:
-                ref_rt_min = st.number_input(
-                    "Reference RT min (minutes)",
-                    min_value=0.0,
-                    value=DEFAULT_REF_RT_WINDOW[0],
-                    step=0.1,
-                    help="Lower bound of the RT window used to search for your reference compound.",
-                )
+                ref_rt_min = st.number_input("Reference RT min (minutes)", min_value=0.0, value=DEFAULT_REF_RT_WINDOW[0], step=0.1)
             with ref_col3:
-                ref_rt_max = st.number_input(
-                    "Reference RT max (minutes)",
-                    min_value=0.0,
-                    value=DEFAULT_REF_RT_WINDOW[1],
-                    step=0.1,
-                    help="Upper bound of the RT window used to search for your reference compound.",
-                )
-
-            ref_tol = st.number_input(
-                "Reference m/z tolerance (Da)",
-                min_value=0.0001,
-                max_value=5.0,
-                value=DEFAULT_REF_TOL,
-                step=0.0001,
-                format="%.4f",
-                help="Allowed m/z tolerance for the reference compound.",
-            )
+                ref_rt_max = st.number_input("Reference RT max (minutes)", min_value=0.0, value=DEFAULT_REF_RT_WINDOW[1], step=0.1)
+            ref_tol = st.number_input("Reference m/z tolerance (Da)", min_value=0.0001, max_value=5.0, value=DEFAULT_REF_TOL, step=0.0001, format="%.4f")
             ref_rt_window = (float(ref_rt_min), float(ref_rt_max))
 
-        st.markdown("**Optional metadata and QC settings**")
-        metadata_file = st.file_uploader(
-            "Optional metadata CSV",
-            type=["csv"],
-            help="Make sure you have a column with either source_file or filename and the EXACT name for your .mzML file (EX: MeOH.mzML)",
-        )
-
+        metadata_file = st.file_uploader("Optional metadata CSV", type=["csv"])
         metadata_path = None
         do_blank_filter = False
         do_batch_correct = False
         if metadata_file is not None:
-            metadata_path = save_uploaded_binary(metadata_file, UPLOAD_META_DIR)
+            metadata_path = save_uploaded_binary(metadata_file, paths["metadata"])
             st.session_state["last_metadata_file"] = str(metadata_path)
-            st.caption("Metadata detected. Blank filtering and batch correction options are now available.")
             qc_col1, qc_col2 = st.columns(2)
             with qc_col1:
                 do_blank_filter = st.checkbox("Apply blank filter", value=True)
@@ -781,13 +652,9 @@ def render_run_page():
 
         ms1_points_path = None
         if not extract_ms1:
-            ms1_points_file = st.file_uploader(
-                "Optional MS1 points CSV",
-                type=["csv"],
-                help="Make sure your uploaded MS1 points were generated from the SAME files using CPM",
-            )
+            ms1_points_file = st.file_uploader("Optional MS1 points CSV", type=["csv"])
             if ms1_points_file is not None:
-                ms1_points_path = save_uploaded_binary(ms1_points_file, UPLOAD_MS1_DIR)
+                ms1_points_path = save_uploaded_binary(ms1_points_file, paths["ms1_points_uploads"])
                 st.session_state["last_ms1_points_file"] = str(ms1_points_path)
             elif st.session_state.get("last_ms1_points_file"):
                 prev = Path(st.session_state["last_ms1_points_file"])
@@ -795,26 +662,32 @@ def render_run_page():
                     ms1_points_path = prev
                     st.info(f"Using previously uploaded MS1 points file: {prev.name}")
 
-    col_run, col_clear_session, col_clear_uploads, col_clear_aux = st.columns([3, 1, 1, 1])
+    col_run, col_clear_state, col_clear_uploads, col_clear_runs = st.columns([3, 1, 1, 1])
     with col_run:
         run_clicked = st.button("Run analysis", type="primary")
-    with col_clear_session:
-        if st.button("Clear session"):
-            clear_session_memory()
+    with col_clear_state:
+        if st.button("Clear session state"):
+            clear_session_state_only()
             st.rerun()
     with col_clear_uploads:
-        if st.button("Clear uploaded mzML"):
-            clear_persistent_uploads()
+        if st.button("Clear saved uploads"):
+            clear_folder_contents(paths["uploads"])
+            clear_folder_contents(paths["metadata"])
+            clear_folder_contents(paths["ms1_points_uploads"])
+            st.session_state.pop("last_saved_files", None)
+            st.session_state.pop("last_metadata_file", None)
+            st.session_state.pop("last_ms1_points_file", None)
             st.rerun()
-    with col_clear_aux:
-        if st.button("Clear aux uploads"):
-            clear_persistent_metadata()
-            clear_persistent_ms1_points()
+    with col_clear_runs:
+        if st.button("Clear saved runs"):
+            clear_folder_contents(paths["runs"])
+            clear_folder_contents(paths["downloads"])
+            clear_folder_contents(paths["logs"])
+            reset_download_state()
             st.rerun()
 
     if run_clicked:
         reset_download_state()
-        st.session_state["download_consumed"] = False
 
         if not saved_files:
             st.session_state["download_status"] = "error"
@@ -822,200 +695,119 @@ def render_run_page():
         elif rt_max < rt_min:
             st.session_state["download_status"] = "error"
             st.session_state["download_status_detail"] = "RT max must be greater than or equal to RT min."
+        elif use_reference and ref_rt_window is not None and ref_rt_window[1] < ref_rt_window[0]:
+            st.session_state["download_status"] = "error"
+            st.session_state["download_status_detail"] = "Reference RT max must be greater than or equal to Reference RT min."
         else:
-            ref_inputs_valid = True
-            if use_reference and ref_rt_window is not None and ref_rt_window[1] < ref_rt_window[0]:
-                st.session_state["download_status"] = "error"
-                st.session_state["download_status_detail"] = (
-                    "Reference RT max must be greater than or equal to Reference RT min."
-                )
-                ref_inputs_valid = False
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_root = paths["runs"] / class_tag / stamp
+            output_root.mkdir(parents=True, exist_ok=True)
 
-            if ref_inputs_valid:
-                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                output_root = runs_dir / class_tag / stamp
-                output_root.mkdir(parents=True, exist_ok=True)
+            log_capture = io.StringIO()
+            st.session_state["download_status"] = "running"
+            st.session_state["download_status_detail"] = "Pipeline is running."
 
-                log_capture = io.StringIO()
-                st.session_state["download_status"] = "running"
-                st.session_state["download_status_detail"] = (
-                    "Pipeline is running and outputs will be packaged into a ZIP when complete."
-                )
-
-                try:
-                    with st.spinner(f"Running {class_tag} pipeline..."):
-                        with patched_print(), contextlib.redirect_stdout(log_capture), contextlib.redirect_stderr(log_capture):
-                            pipeline_result = backend.run_pipeline_notebook(
-                                class_tag=class_tag,
-                                files=[str(p) for p in saved_files],
-                                metadata_path=str(metadata_path) if metadata_path else None,
-                                CyanoMetDBLibrary=str(staged_library_path),
-                                ms1_points_file=str(ms1_points_path) if ms1_points_path else None,
-                                output_root=output_root,
-                                extract_ms1=extract_ms1,
-                                tol=DEFAULT_TOL,
-                                polarity=POLARITY,
-                                rt_window=(float(rt_min), float(rt_max)),
-                                ref_rt_window=ref_rt_window,
-                                ref_mz=ref_mz,
-                                ref_tol=float(ref_tol),
-                                do_blank_filter=do_blank_filter,
-                                do_batch_correct=do_batch_correct,
-                                tol_da=float(tol_da),
-                            )
-
-                    output_files, roots, explicit_files = collect_output_files_from_result(pipeline_result, output_root)
-                    if not output_files and output_root.exists():
-                        output_files = collect_output_files(output_root)
-                        if not roots:
-                            roots = [output_root]
-
-                    if not output_files:
-                        raise RuntimeError("The pipeline finished but no output files were found to package.")
-
-                    total_bytes = sum(p.stat().st_size for p in output_files if p.exists())
-                    total_mb = total_bytes / (1024 * 1024)
-                    if total_mb > MAX_ZIP_MB:
-                        raise RuntimeError(
-                            f"Output package is about {total_mb:.1f} MB, which exceeds the in-memory ZIP limit of {MAX_ZIP_MB} MB."
+            try:
+                with st.spinner(f"Running {class_tag} pipeline..."):
+                    with patched_print(), contextlib.redirect_stdout(log_capture), contextlib.redirect_stderr(log_capture):
+                        pipeline_result = backend.run_pipeline_notebook(
+                            class_tag=class_tag,
+                            files=[str(p) for p in saved_files],
+                            metadata_path=str(metadata_path) if metadata_path else None,
+                            CyanoMetDBLibrary=str(staged_library_path),
+                            ms1_points_file=str(ms1_points_path) if ms1_points_path else None,
+                            output_root=output_root,
+                            extract_ms1=extract_ms1,
+                            tol=DEFAULT_TOL,
+                            polarity=POLARITY,
+                            rt_window=(float(rt_min), float(rt_max)),
+                            ref_rt_window=ref_rt_window,
+                            ref_mz=ref_mz,
+                            ref_tol=float(ref_tol),
+                            do_blank_filter=do_blank_filter,
+                            do_batch_correct=do_batch_correct,
+                            tol_da=float(tol_da),
                         )
 
-                    previews = build_previews(output_files, class_tag)
-                    zip_bytes = make_zip_bytes(output_files, session_root)
-                    source_roots = [str(p) for p in roots] + [str(p) for p in explicit_files if p.is_file()]
+                output_files, roots, explicit_files = collect_output_files_from_result(pipeline_result, output_root)
+                if not output_files and output_root.exists():
+                    output_files = collect_output_files(output_root)
+                    if not roots:
+                        roots = [output_root]
 
-                    st.session_state["zip_bytes"] = zip_bytes
-                    st.session_state["zip_name"] = f"CPM_{class_tag}_{stamp}.zip"
-                    st.session_state["inline_log"] = safe_text(log_capture.getvalue())
-                    st.session_state["previews"] = previews
-                    st.session_state["run_summary"] = {
-                        "class_tag": class_tag,
-                        "file_count": len(saved_files),
-                        "zip_size_mb": len(zip_bytes) / (1024 * 1024),
-                        "output_count": len(output_files),
-                        "source_roots": source_roots,
-                        "root_folder": str(output_root),
-                    }
-                    st.session_state["download_status"] = "ready"
-                    st.session_state["download_status_detail"] = (
-                        "ZIP package is ready below. Temporary run outputs were removed after packaging. Uploaded inputs were kept."
-                    )
-                    st.session_state["download_ready"] = True
+                if not output_files:
+                    raise RuntimeError("The pipeline finished but no output files were found.")
 
-                except Exception as exc:
-                    st.session_state["inline_log"] = safe_text(log_capture.getvalue())
-                    st.session_state["download_status"] = "error"
-                    st.session_state["download_status_detail"] = safe_text(exc)
+                previews = build_previews(output_files, class_tag)
 
-                finally:
-                    # Delete only temp run outputs. Persistent uploaded inputs remain available.
-                    cleanup_path(output_root)
+                zip_path = paths["downloads"] / f"CPM_{class_tag}_{stamp}.zip"
+                build_zip_on_disk(output_files, paths["root"], zip_path)
 
-    zip_bytes = st.session_state.get("zip_bytes")
-    zip_name = st.session_state.get("zip_name")
-    run_summary = st.session_state.get("run_summary")
-    inline_log = st.session_state.get("inline_log", "")
+                st.session_state["zip_path"] = str(zip_path)
+                st.session_state["zip_name"] = zip_path.name
+                st.session_state["inline_log"] = safe_text(log_capture.getvalue())
+                st.session_state["previews"] = previews
+                st.session_state["discovered_output_files"] = [str(p) for p in output_files]
+                st.session_state["run_summary"] = {
+                    "class_tag": class_tag,
+                    "file_count": len(saved_files),
+                    "zip_size_mb": zip_path.stat().st_size / (1024 * 1024),
+                    "output_count": len(output_files),
+                    "root_folder": str(output_root),
+                    "save_root": str(paths["root"]),
+                }
+                st.session_state["download_status"] = "ready"
+                st.session_state["download_status_detail"] = "Run complete. Outputs and ZIP were saved to your chosen folder."
+
+            except Exception as exc:
+                st.session_state["inline_log"] = safe_text(log_capture.getvalue())
+                st.session_state["download_status"] = "error"
+                st.session_state["download_status_detail"] = safe_text(exc)
+
     status = st.session_state.get("download_status", "idle")
     status_detail = st.session_state.get("download_status_detail", "")
     previews = st.session_state.get("previews", {})
+    run_summary = st.session_state.get("run_summary")
+    inline_log = st.session_state.get("inline_log", "")
+    zip_path = st.session_state.get("zip_path")
+    zip_name = st.session_state.get("zip_name")
+    discovered_output_files = [Path(p) for p in st.session_state.get("discovered_output_files", []) if Path(p).exists()]
 
-    with download_status_placeholder:
-        if status == "running":
-            st.info("Pipeline is running. Scroll down after completion for the blue download button.")
-            st.write(status_detail)
-        elif status == "error":
-            st.error("No ZIP available")
-            st.write(status_detail)
-        elif status == "ready" and run_summary:
-            st.success("Run complete. Review the outputs below, then download the ZIP immediately after them.")
-            st.write(
-                f"Class: {run_summary['class_tag']} | Inputs: {run_summary['file_count']} | "
-                f"Packaged files: {run_summary['output_count']} | ZIP size: {run_summary['zip_size_mb']:.1f} MB"
-            )
-        elif status == "downloaded":
-            st.success("ZIP removed from session")
-            st.write(status_detail)
-        else:
-            st.info("No ZIP yet")
-            st.write(status_detail)
+    if status == "running":
+        st.info(status_detail)
+    elif status == "error":
+        st.error("Run failed or packaging failed.")
+        st.write(status_detail)
+    elif status == "ready" and run_summary:
+        st.success("Run complete.")
+        st.write(
+            f"Class: {run_summary['class_tag']} | Inputs: {run_summary['file_count']} | "
+            f"Packaged files: {run_summary['output_count']} | ZIP size: {run_summary['zip_size_mb']:.1f} MB"
+        )
+        st.write(f"Saved under: {run_summary['save_root']}")
+    else:
+        st.info(status_detail)
 
     if status in {"ready", "downloaded"} and previews:
         st.subheader("Run outputs")
 
-        heatmap_png = previews.get("cyano_heatmap_png")
-        if heatmap_png:
-            st.subheader("Specific cyanopeptide-class detection intensity heatmap")
-            st.image(heatmap_png)
-            st.markdown(
-                "<p style='text-align:center; font-size:15px; color:black;'>"
-                "Output indicates presence (measured by sum of intensities) of cyanopeptides found in sample(s)<br>"
-                "</p>",
-                unsafe_allow_html=True,
-            )
+        for key, title in [
+            ("cyano_heatmap_png", "Specific cyanopeptide-class detection intensity heatmap"),
+            ("rt_plot_png", "Precursor RT plot"),
+            ("dot_plot_png", "Individual ion dot plot"),
+            ("diagnostic_individual_png", "Diagnostic ion distribution – individual"),
+            ("matched_tiles_png", "Matched compound tiles (Putative annotations)"),
+            ("adduct_graph_png", "Adduct graph (merged)"),
+        ]:
+            data = previews.get(key)
+            if data:
+                st.subheader(title)
+                st.image(data)
 
         ind_hits = previews.get("ind_hits_table")
         if ind_hits:
             st.subheader("Individual hits (labeled) – preview")
             st.dataframe(pd.DataFrame(ind_hits["rows"], columns=ind_hits["columns"]))
-
-        rt_png = previews.get("rt_plot_png")
-        if rt_png:
-            st.subheader("Precursor RT plot")
-            st.image(rt_png)
-            st.markdown(
-                "<p style='text-align:center; font-size:15px; color:black;'>"
-                "Retention time plot versus diagnostic product ion detected for cyanopeptide class<br>"
-                "</p>",
-                unsafe_allow_html=True,
-            )
-
-        dot_png = previews.get("dot_plot_png")
-        if dot_png:
-            st.subheader("Individual ion dot plot")
-            st.image(dot_png)
-            st.markdown(
-                "<p style='text-align:center; font-size:15px; color:black;'>"
-                "Scatter plot of diagnostic ion detection across precursor m/z values. Each point represents the presence of a diagnostic ion associated with a given precursor ion. Point size is scaled by the number of scans in which the precursor was observed, reflecting relative abundance or detection frequency, while color indicates the source file.<br>"
-                "</p>",
-                unsafe_allow_html=True,
-            )
-
-        diag_png = previews.get("diagnostic_individual_png")
-        if diag_png:
-            st.subheader("Diagnostic ion distribution – individual")
-            st.image(diag_png)
-            st.markdown(
-                "<p style='text-align:center; font-size:15px; color:black;'>"
-                "Counts of each diagnostic product ion for each file detected. <br>"
-                "</p>",
-                unsafe_allow_html=True,
-            )
-
-        matched_tiles_png = previews.get("matched_tiles_png")
-        if matched_tiles_png:
-            st.subheader("Matched compound tiles (Putative annotations)")
-            st.image(matched_tiles_png)
-            st.markdown(
-                "<p style='text-align:center; font-size:15px; color:black;'>"
-                "Level 3 identification of putative matches to cyanopeptides based on m/z, class-specific CyanoMetDB search, and presence of specific diagnostic product ions. <br>"
-                "</p>",
-                unsafe_allow_html=True,
-            )
-        else:
-            st.info("No 'matched_compound_tiles' PNG found for this run.")
-
-        adduct_graph_png = previews.get("adduct_graph_png")
-        if adduct_graph_png:
-            st.subheader("Adduct graph (merged) if messy please open Parent Adduct Summary Excel")
-            st.image(adduct_graph_png)
-            st.markdown(
-                "<p style='text-align:center; font-size:15px; color:black;'>"
-                "Adduct network of compounds related by common adducts. Use this to compare your matched and putative novel congeners! <br>"
-                "</p>",
-                unsafe_allow_html=True,
-            )
-        else:
-            st.info("No 'adduct_graph_merged_' PNG found for this run.")
 
         indiv_merged = previews.get("indiv_merged_table")
         if indiv_merged:
@@ -1026,51 +818,37 @@ def render_run_page():
         if unknown_table and unknown_table["rows"]:
             st.subheader("Unknown features with scans (table)")
             st.dataframe(pd.DataFrame(unknown_table["rows"], columns=unknown_table["columns"]))
-            st.markdown(
-                "<p style='text-align:center; font-size:15px; color:black;'>"
-                "Unknown putative novel congeners with 2 or more diagnostic product ions for your class of compounds. Remember to compare with your adduct network! The putative novel congeners list can aid in prioritization of metabolites for further characterization analysis.<br>"
-                "</p>",
-                unsafe_allow_html=True,
-            )
-        else:
-            st.info("No unknown features detected.")
+
+        if discovered_output_files:
+            st.divider()
+            render_all_discovered_outputs(discovered_output_files)
 
         st.divider()
         st.subheader("Download Results")
-
-        if zip_bytes is not None and zip_name is not None:
-            downloaded = st.download_button(
-                "Download All Outputs (.zip)",
-                data=zip_bytes,
-                file_name=zip_name,
-                mime="application/zip",
-                type="primary",
-                use_container_width=True,
-                key="bottom-download-button",
-            )
-            st.caption("After the first successful click, the ZIP is removed from app memory.")
-
+        if zip_path and zip_name and Path(zip_path).exists():
+            with open(zip_path, "rb") as fh:
+                downloaded = st.download_button(
+                    "Download All Outputs (.zip)",
+                    data=fh,
+                    file_name=zip_name,
+                    mime="application/zip",
+                    type="primary",
+                    use_container_width=True,
+                )
+            st.caption("MS1 points are included in the ZIP. The ZIP is also saved to your chosen output folder.")
             if downloaded:
                 consume_download()
                 st.rerun()
+            st.code(str(zip_path))
         else:
-            st.info("The ZIP has already been removed from memory for this session. Run the pipeline again to generate a new download.")
-
-        if run_summary:
-            with st.expander("Show packaged folders", expanded=False):
-                for folder in run_summary.get("source_roots", []):
-                    st.code(folder)
+            st.info("ZIP file not currently available in session.")
 
         if inline_log:
             with st.expander("Run log", expanded=False):
                 st.text(inline_log)
 
-        st.divider()
-        st.subheader("Need help?")
-        st.info("If you see an error or something looks off, contact Sierra Hefferan @sheffera@umich.edu.")
 
-
-page = st.sidebar.radio("Navigation", ["About this app", "Run pipeline"], index=0)
+page = st.sidebar.radio("Navigation", ["About this app", "Run pipeline"], index=1)
 
 if page == "About this app":
     render_home_page()
