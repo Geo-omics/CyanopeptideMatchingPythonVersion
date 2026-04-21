@@ -24,7 +24,7 @@ PROTON = 1.007276466
 # Default set (positive mode). You can pass your own dict to override/extend.
 DEFAULT_DELTAS: Dict[str, float] = {
     "+H2O":              18.010565,                          # add water
-    "-H2O":             -18.010565,                          # lose water
+    "-H2O+H":           -17.010565,                          # lose water +H
     "+NH4 (vs H)":       18.033823 - PROTON,                 # NH4 vs H
     "+Na (vs H)":        22.989218 - PROTON,                 # Na vs H
     "+K (vs H)":         38.963158 - PROTON,                 # K vs H
