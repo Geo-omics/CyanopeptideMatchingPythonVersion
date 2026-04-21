@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 import contextlib
+import hashlib
 import importlib.util
 import io
 import shutil
@@ -18,8 +19,20 @@ import streamlit as st
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
+
+# Temporary workspace for per-run outputs only
 TEMP_BASE = Path(tempfile.gettempdir()) / "cpm_app"
 TEMP_BASE.mkdir(parents=True, exist_ok=True)
+
+# Persistent storage for uploaded inputs
+UPLOAD_DIR = BASE_DIR / "uploaded_mzml"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+UPLOAD_META_DIR = BASE_DIR / "uploaded_metadata"
+UPLOAD_META_DIR.mkdir(parents=True, exist_ok=True)
+
+UPLOAD_MS1_DIR = BASE_DIR / "uploaded_ms1_points"
+UPLOAD_MS1_DIR.mkdir(parents=True, exist_ok=True)
 
 POLARITY = "POSITIVE"
 DEFAULT_RT_WINDOW = (2.0, 25.0)
@@ -105,8 +118,9 @@ def get_session_root() -> Path:
     if "session_id" not in st.session_state:
         st.session_state["session_id"] = uuid.uuid4().hex[:10]
     root = TEMP_BASE / st.session_state["session_id"]
-    (root / "uploads").mkdir(parents=True, exist_ok=True)
+    root.mkdir(parents=True, exist_ok=True)
     (root / "runs").mkdir(parents=True, exist_ok=True)
+    (root / "bundled_data").mkdir(parents=True, exist_ok=True)
     return root
 
 
@@ -121,12 +135,40 @@ def stage_bundled_library(session_root: Path) -> Path:
 
 
 # -----------------------------
-# Filesystem helpers
+# Persistent upload helpers
 # -----------------------------
-def save_and_fix_uploaded_mzml(uploaded_file, upload_dir: Path) -> Path:
+def _unique_persistent_path(upload_dir: Path, filename: str, raw_bytes: bytes) -> Path:
+    """
+    Returns a stable path in upload_dir.
+
+    If a file with the same name already exists:
+      - reuse it if bytes are identical
+      - otherwise save as stem_<hash>.suffix
+    """
     upload_dir.mkdir(parents=True, exist_ok=True)
-    out_path = upload_dir / uploaded_file.name
+    base_path = upload_dir / filename
+
+    if not base_path.exists():
+        return base_path
+
+    try:
+        existing = base_path.read_bytes()
+        if existing == raw_bytes:
+            return base_path
+    except Exception:
+        pass
+
+    digest = hashlib.sha1(raw_bytes).hexdigest()[:10]
+    stem = base_path.stem
+    suffix = base_path.suffix
+    return upload_dir / f"{stem}_{digest}{suffix}"
+
+
+def save_and_fix_uploaded_mzml(uploaded_file, upload_dir: Path | None = None) -> Path:
+    upload_dir = upload_dir or UPLOAD_DIR
     raw_bytes = uploaded_file.getvalue()
+    out_path = _unique_persistent_path(upload_dir, uploaded_file.name, raw_bytes)
+
     try:
         text = raw_bytes.decode("utf-8")
     except UnicodeDecodeError:
@@ -138,6 +180,16 @@ def save_and_fix_uploaded_mzml(uploaded_file, upload_dir: Path) -> Path:
     return out_path
 
 
+def save_uploaded_binary(uploaded_file, upload_dir: Path) -> Path:
+    raw_bytes = uploaded_file.getvalue()
+    out_path = _unique_persistent_path(upload_dir, uploaded_file.name, raw_bytes)
+    out_path.write_bytes(raw_bytes)
+    return out_path
+
+
+# -----------------------------
+# Filesystem helpers
+# -----------------------------
 def collect_output_files(run_dir: Path) -> list[Path]:
     allowed = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".png", ".jpg", ".jpeg", ".svg", ".pdf", ".json"}
     files: list[Path] = []
@@ -353,7 +405,12 @@ def build_previews(files: list[Path], class_tag: str) -> dict:
         latest_match(files, prefix=f"individual_hits_{class_tag}_", suffix=".csv"), head=5
     )
     previews["indiv_merged_table"] = load_table_preview(
-        latest_match(files, prefix="indiv_merged_summary_", suffix=".csv", exclude_contains=["with_intensities", "best_edges"]),
+        latest_match(
+            files,
+            prefix="indiv_merged_summary_",
+            suffix=".csv",
+            exclude_contains=["with_intensities", "best_edges"],
+        ),
         head=5,
     )
     previews["unknown_features_table"] = load_table_preview(
@@ -396,10 +453,32 @@ def reset_download_state() -> None:
 
 
 def clear_session_memory() -> None:
+    """
+    Clears only session-scoped state and temp run folders.
+    Persistent uploaded inputs are preserved.
+    """
     cleanup_path(TEMP_BASE / st.session_state.get("session_id", ""))
     reset_download_state()
-    for key in ["last_saved_files", "session_id"]:
+    for key in ["last_saved_files", "last_metadata_file", "last_ms1_points_file", "session_id"]:
         st.session_state.pop(key, None)
+
+
+def clear_persistent_uploads() -> None:
+    shutil.rmtree(UPLOAD_DIR, ignore_errors=True)
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    st.session_state.pop("last_saved_files", None)
+
+
+def clear_persistent_metadata() -> None:
+    shutil.rmtree(UPLOAD_META_DIR, ignore_errors=True)
+    UPLOAD_META_DIR.mkdir(parents=True, exist_ok=True)
+    st.session_state.pop("last_metadata_file", None)
+
+
+def clear_persistent_ms1_points() -> None:
+    shutil.rmtree(UPLOAD_MS1_DIR, ignore_errors=True)
+    UPLOAD_MS1_DIR.mkdir(parents=True, exist_ok=True)
+    st.session_state.pop("last_ms1_points_file", None)
 
 
 def consume_download() -> None:
@@ -477,11 +556,9 @@ def render_home_page():
 
         You can include additional columns for your own recordkeeping.
 
-        
-        **MS1 Points uploaded from mzML tab:** 
+        **MS1 Points uploaded from mzML tab:**
         - If you have already ran analyzes on SAME files and would like to save time or computer resources, you can upload a previous MS1 point generated from CPM.
         - If you have not already ran these SAME files through CPM, please keep "Extract MS1 mzML values" checked!
-
 
         **Optional reference normalization**
         If you have a reference compound, you can enable reference normalization on the Run page and provide:
@@ -513,6 +590,7 @@ def render_home_page():
     with st.expander("Notes about the bundled reference library", expanded=False):
         st.write(
             "CyanoMetDB is bundled with the app package. Keep `CyanoMetDB_Version03.xlsx` "
+            "in `./data/` or beside this app."
         )
 
     st.info("Use the sidebar to switch to **Run pipeline** when you're ready to analyze mzML files.")
@@ -522,7 +600,7 @@ def render_run_page():
     st.title("CPM – Cyanopeptide Pipeline")
     st.caption(
         "Supporting Python modules are bundled with the app. Polarity is fixed to POSITIVE. "
-        "Download-only mode uses a temporary workspace and does not keep permanent outputs."
+        "Uploaded input files are stored persistently unless you explicitly clear them."
     )
 
     try:
@@ -533,7 +611,6 @@ def render_run_page():
         st.stop()
 
     session_root = get_session_root()
-    upload_dir = session_root / "uploads"
     runs_dir = session_root / "runs"
     staged_library_path = stage_bundled_library(session_root)
 
@@ -541,9 +618,14 @@ def render_run_page():
     with st.expander("Show app resources"):
         st.caption(f"Bundled library source: {library_path.name}")
         st.caption(f"Backend loaded from: {backend_path.name}")
+        st.caption(f"Persistent mzML upload folder: {UPLOAD_DIR}")
+        st.caption(f"Persistent metadata folder: {UPLOAD_META_DIR}")
+        st.caption(f"Persistent MS1 points folder: {UPLOAD_MS1_DIR}")
 
     for key, default in {
         "last_saved_files": [],
+        "last_metadata_file": None,
+        "last_ms1_points_file": None,
         "download_status": "idle",
         "download_status_detail": "Run the analysis to generate a downloadable ZIP.",
         "download_ready": False,
@@ -571,11 +653,18 @@ def render_run_page():
 
     saved_files: list[Path] = []
     if uploaded_files:
-        saved_files = [save_and_fix_uploaded_mzml(f, upload_dir) for f in uploaded_files]
+        saved_files = [save_and_fix_uploaded_mzml(f) for f in uploaded_files]
         st.session_state["last_saved_files"] = [str(p) for p in saved_files]
         st.success(f"{len(saved_files)} file(s) ready for analysis.")
     elif st.session_state.get("last_saved_files"):
         saved_files = [Path(p) for p in st.session_state["last_saved_files"] if Path(p).exists()]
+        if saved_files:
+            st.info(f"Using {len(saved_files)} previously uploaded mzML file(s).")
+
+    if saved_files:
+        with st.expander("Files that will be analyzed", expanded=False):
+            for p in saved_files:
+                st.code(str(p))
 
     with st.expander("Analysis settings", expanded=True):
         col1, col2, col3 = st.columns(3)
@@ -595,7 +684,7 @@ def render_run_page():
                 max_value=100.0,
                 value=DEFAULT_RT_WINDOW[1],
                 step=0.1,
-                help= "Filter this for the upper bound of your MS/MS run",
+                help="Filter this for the upper bound of your MS/MS run",
             )
         with col3:
             tol_da = st.number_input(
@@ -604,15 +693,16 @@ def render_run_page():
                 max_value=5.0,
                 value=DEFAULT_TOL_DA,
                 step=0.0001,
-                help= "Set your tolerance for matching to the CyanoMetDB compounds"
+                help="Set your tolerance for matching to the CyanoMetDB compounds",
             )
 
         col4, _, _ = st.columns(3)
         with col4:
-            extract_ms1 = st.checkbox("Extract MS1 points from uploaded mzML", 
-            value=True,
-            help="Run MS1 extraction UNLESS you have previously generated MS1 points from these SAME mzML files!!"
-        )
+            extract_ms1 = st.checkbox(
+                "Extract MS1 points from uploaded mzML",
+                value=True,
+                help="Run MS1 extraction UNLESS you have previously generated MS1 points from these SAME mzML files!!",
+            )
 
         use_reference = st.checkbox(
             "Use reference compound normalization",
@@ -665,33 +755,61 @@ def render_run_page():
             ref_rt_window = (float(ref_rt_min), float(ref_rt_max))
 
         st.markdown("**Optional metadata and QC settings**")
-        metadata_file = st.file_uploader("Optional metadata CSV", type=["csv"],
-            help= "Make sure you have a column with either source_file or filename and the EXACT name for your .mzML file (EX: MeOH.mzML)",
+        metadata_file = st.file_uploader(
+            "Optional metadata CSV",
+            type=["csv"],
+            help="Make sure you have a column with either source_file or filename and the EXACT name for your .mzML file (EX: MeOH.mzML)",
         )
 
-
+        metadata_path = None
         do_blank_filter = False
         do_batch_correct = False
         if metadata_file is not None:
+            metadata_path = save_uploaded_binary(metadata_file, UPLOAD_META_DIR)
+            st.session_state["last_metadata_file"] = str(metadata_path)
             st.caption("Metadata detected. Blank filtering and batch correction options are now available.")
             qc_col1, qc_col2 = st.columns(2)
             with qc_col1:
                 do_blank_filter = st.checkbox("Apply blank filter", value=True)
             with qc_col2:
                 do_batch_correct = st.checkbox("Apply batch correction", value=True)
+        elif st.session_state.get("last_metadata_file"):
+            prev = Path(st.session_state["last_metadata_file"])
+            if prev.exists():
+                metadata_path = prev
+                st.info(f"Using previously uploaded metadata file: {prev.name}")
 
-        ms1_points_file = None
+        ms1_points_path = None
         if not extract_ms1:
-            ms1_points_file = st.file_uploader("Optional MS1 points CSV", type=["csv"],
-            help= "Make sure your uploaded MS1 points were generated from the SAME files using CPM",
-        )
+            ms1_points_file = st.file_uploader(
+                "Optional MS1 points CSV",
+                type=["csv"],
+                help="Make sure your uploaded MS1 points were generated from the SAME files using CPM",
+            )
+            if ms1_points_file is not None:
+                ms1_points_path = save_uploaded_binary(ms1_points_file, UPLOAD_MS1_DIR)
+                st.session_state["last_ms1_points_file"] = str(ms1_points_path)
+            elif st.session_state.get("last_ms1_points_file"):
+                prev = Path(st.session_state["last_ms1_points_file"])
+                if prev.exists():
+                    ms1_points_path = prev
+                    st.info(f"Using previously uploaded MS1 points file: {prev.name}")
 
-    col_run, col_clear = st.columns([3, 1])
+    col_run, col_clear_session, col_clear_uploads, col_clear_aux = st.columns([3, 1, 1, 1])
     with col_run:
         run_clicked = st.button("Run analysis", type="primary")
-    with col_clear:
+    with col_clear_session:
         if st.button("Clear session"):
             clear_session_memory()
+            st.rerun()
+    with col_clear_uploads:
+        if st.button("Clear uploaded mzML"):
+            clear_persistent_uploads()
+            st.rerun()
+    with col_clear_aux:
+        if st.button("Clear aux uploads"):
+            clear_persistent_metadata()
+            clear_persistent_ms1_points()
             st.rerun()
 
     if run_clicked:
@@ -717,16 +835,6 @@ def render_run_page():
                 stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 output_root = runs_dir / class_tag / stamp
                 output_root.mkdir(parents=True, exist_ok=True)
-
-                metadata_path = None
-                if metadata_file is not None:
-                    metadata_path = output_root / metadata_file.name
-                    metadata_path.write_bytes(metadata_file.getvalue())
-
-                ms1_points_path = None
-                if ms1_points_file is not None:
-                    ms1_points_path = output_root / ms1_points_file.name
-                    ms1_points_path.write_bytes(ms1_points_file.getvalue())
 
                 log_capture = io.StringIO()
                 st.session_state["download_status"] = "running"
@@ -790,16 +898,18 @@ def render_run_page():
                     }
                     st.session_state["download_status"] = "ready"
                     st.session_state["download_status_detail"] = (
-                        "ZIP package is ready below. Temporary run files were deleted after packaging."
+                        "ZIP package is ready below. Temporary run outputs were removed after packaging. Uploaded inputs were kept."
                     )
                     st.session_state["download_ready"] = True
+
                 except Exception as exc:
                     st.session_state["inline_log"] = safe_text(log_capture.getvalue())
                     st.session_state["download_status"] = "error"
                     st.session_state["download_status_detail"] = safe_text(exc)
+
                 finally:
-                    cleanup_path(session_root)
-                    st.session_state["last_saved_files"] = []
+                    # Delete only temp run outputs. Persistent uploaded inputs remain available.
+                    cleanup_path(output_root)
 
     zip_bytes = st.session_state.get("zip_bytes")
     zip_name = st.session_state.get("zip_name")
