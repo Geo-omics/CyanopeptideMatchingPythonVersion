@@ -521,9 +521,15 @@ def render_home_page():
     st.title("CPM – Cyanopeptide Metabolomics Pipeline")
     st.markdown(
         """
-        Upload mzML files, run the pipeline, preview outputs, and download the results as a ZIP.
+        This version lets you choose the base output folder inside Streamlit.
 
-        Temporary working files are stored automatically during the run.
+        Everything is saved under the folder you choose:
+        - uploads
+        - uploaded metadata
+        - uploaded MS1 points
+        - run outputs
+        - ZIP files
+        - staged library copy
         """
     )
 
@@ -538,16 +544,31 @@ def render_home_page():
 
     staged_library_path = stage_bundled_library(save_root_text)
 
-    save_root_text = str(get_default_save_root())
+
+    st.subheader("Save location")
+
+    default_save_root = str(get_default_save_root())
+
+    save_root_text = st.text_input(
+        "Base folder for uploads, runs, logs, and ZIPs",
+        value=default_save_root,
+        help="Example: C:\\Users\\you\\Documents\\CPM_Output or D:\\CPM_Output",
+    )
+
 
     try:
         paths = get_paths(save_root_text)
     except Exception as exc:
-        st.error(f"Could not create or access temporary working folder: {exc}")
+        st.error(f"Could not create or access that save folder: {exc}")
         st.stop()
 
     staged_library_path = stage_bundled_library(save_root_text)
 
+    with st.expander("Current save folders", expanded=False):
+        for k, p in paths.items():
+            st.code(f"{k}: {p}")
+        st.caption(f"Backend loaded from: {backend_path.name}")
+        st.caption(f"Bundled library source: {library_path.name}")
 
     for key, default in {
         "last_saved_files": [],
