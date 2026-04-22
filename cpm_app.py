@@ -71,24 +71,13 @@ def patched_print():
 # -----------------------------
 # Save-root helpers
 # -----------------------------
-def get_default_save_root() -> Path:
-    preferred = Path.home() / "Documents" / "CPM_Output"
-    return preferred
-
-
-def normalize_save_root(save_root_text: str) -> Path:
-    text = (save_root_text or "").strip()
-    if not text:
-        return get_default_save_root()
-    return Path(text).expanduser()
-
-
-def get_paths(save_root_text: str) -> dict[str, Path]:
-    root = normalize_save_root(save_root_text)
+def get_paths() -> dict[str, Path]:
     session_id = st.session_state.get("session_id")
     if not session_id:
         session_id = uuid.uuid4().hex[:10]
         st.session_state["session_id"] = session_id
+
+    root = Path(tempfile.gettempdir()) / "cpm_streamlit_sessions" / session_id
 
     paths = {
         "root": root,
@@ -96,10 +85,9 @@ def get_paths(save_root_text: str) -> dict[str, Path]:
         "metadata": root / "metadata",
         "ms1_points_uploads": root / "uploaded_ms1_points",
         "runs": root / "runs",
-        "downloads": root / "zips",
+        "downloads": root / "downloads",
         "logs": root / "logs",
         "bundled_data": root / "bundled_data",
-        "session_temp": root / "_session_temp" / session_id,
     }
 
     for p in paths.values():
@@ -139,9 +127,9 @@ def resolve_library_path() -> Path:
     )
 
 
-def stage_bundled_library(save_root_text: str) -> Path:
+def stage_bundled_library() -> Path:
     src = resolve_library_path()
-    paths = get_paths(save_root_text)
+    paths = get_paths()
     staged = paths["bundled_data"] / src.name
     if not staged.exists() or staged.stat().st_size != src.stat().st_size:
         shutil.copy2(src, staged)
@@ -496,12 +484,14 @@ def clear_folder_contents(folder: Path) -> None:
 
 
 def consume_download() -> None:
-    zip_path = st.session_state.get("zip_path")
-    if zip_path:
-        try:
-            Path(zip_path).unlink(missing_ok=True)
-        except Exception:
-            pass
+    paths = get_paths()
+    root = paths["root"]
+
+    try:
+        if root.exists():
+            shutil.rmtree(root, ignore_errors=True)
+    except Exception:
+        pass
 
     st.session_state["zip_path"] = None
     st.session_state["zip_name"] = None
@@ -509,9 +499,11 @@ def consume_download() -> None:
     st.session_state["download_consumed"] = True
     st.session_state["download_status"] = "downloaded"
     st.session_state["download_status_detail"] = (
-        "Download started. The ZIP file was removed from the session download slot."
+        "Download started. Temporary session files were removed."
     )
 
+    for key in ["last_saved_files", "last_metadata_file", "last_ms1_points_file"]:
+        st.session_state.pop(key, None)
 
 # -----------------------------
 # UI config
@@ -521,19 +513,83 @@ st.set_page_config(page_title="Cyanopeptide Pipeline", layout="wide")
 
 def render_home_page():
     st.title("CPM – Cyanopeptide Metabolomics Pipeline")
+    st.subheader("What this app does")
+
     st.markdown(
         """
-        This version lets you choose the base output folder inside Streamlit.
+        This application screens LC-MS/MS mzML files for cyanopeptide classes using class-specific
+        diagnostic ions, summarizes precursor features, performs optional QC and blank handling,
+        links related adduct features, and compares putative matches against the bundled
+        CyanoMetDB reference library.
 
-        Everything is saved under the folder you choose:
-        - uploads
-        - uploaded metadata
-        - uploaded MS1 points
-        - run outputs
-        - ZIP files
-        - staged library copy
+        **Workflow overview**
+        1. Upload one or more mzML files.
+        2. Optionally upload a metadata CSV for blank filtering and batch correction.
+        3. Optionally enable reference compound normalization.
+        4. Run the selected cyanopeptide class pipeline.
+        5. Review plots, tables, and annotations on screen.
+        6. Download a ZIP of all generated outputs.
         """
     )
+
+    st.caption(
+        "CyanoMetDB reference: Jones MR et al., CyanoMetDB, a comprehensive public "
+        "database of secondary metabolites from cyanobacteria, Water Research 196 "
+        "(2021) 117017. https://doi.org/10.1016/j.watres.2021.117017; "
+        "Janssen et al., 2024, DOI: 10.5281/zenodo.13854577"
+    )
+
+    st.subheader("What the metadata file is for")
+    st.markdown(
+        """
+        The metadata CSV is optional, but recommended when you want blank filtering and/or
+        batch correction. The most useful columns are:
+
+        - `source_file`: exact mzML filename
+        - `sample_type`: for example `sample` or `blank`
+        - `batch`: batch number or batch label
+
+        You can include additional columns for your own recordkeeping.
+
+        
+        **MS1 Points uploaded from mzML tab:** 
+        - If you have already ran analyzes on SAME files and would like to save time or computer resources, you can upload a previous MS1 point generated from CPM.
+        - If you have not already ran these SAME files through CPM, please keep "Extract MS1 mzML values" checked!
+
+
+        **Optional reference normalization**
+        If you have a reference compound, you can enable reference normalization on the Run page and provide:
+        - a reference precursor m/z
+        - a retention time window to search for that compound
+        - an m/z tolerance for matching
+
+        If you do not have a reference compound, leave this section off and the pipeline will skip normalization.
+        """
+    )
+
+    example_meta = pd.DataFrame(
+        [
+            {"source_file": "meoh.mzML", "sample_type": "blank", "batch": 1, "sample_id": "blank_01"},
+            {"source_file": "mp_m2.mzML", "sample_type": "sample", "batch": 1, "sample_id": "sample_01"},
+            {"source_file": "mpbr_ms2.mzML", "sample_type": "sample", "batch": 1, "sample_id": "sample_02"},
+        ]
+    )
+    st.markdown("**Example metadata table**")
+    st.dataframe(example_meta, use_container_width=True)
+    st.download_button(
+        "Download example metadata CSV",
+        data=example_meta.to_csv(index=False).encode("utf-8"),
+        file_name="example_metadata.csv",
+        mime="text/csv",
+        key="example-metadata-download",
+    )
+
+    with st.expander("Notes about the bundled reference library", expanded=False):
+        st.write(
+            "CyanoMetDB is bundled with the app package. Keep `CyanoMetDB_Version03.xlsx` "
+        )
+
+    st.info("Use the sidebar to switch to **Run pipeline** when you're ready to analyze mzML files.")
 
 
 def render_run_page():
@@ -542,37 +598,12 @@ def render_run_page():
     try:
         backend, backend_path = load_backend_module()
         library_path = resolve_library_path()
+        paths = get_paths()
     except Exception as exc:
         st.error(str(exc))
         st.stop()
 
-
-
-
-    st.subheader("Save location")
-
-    default_save_root = str(get_default_save_root())
-
-    save_root_text = st.text_input(
-        "Base folder for uploads, runs, logs, and ZIPs",
-        value=default_save_root,
-        help="Example: C:\\Users\\you\\Documents\\CPM_Output or D:\\CPM_Output",
-    )
-
-
-    try:
-        paths = get_paths(save_root_text)
-    except Exception as exc:
-        st.error(f"Could not create or access that save folder: {exc}")
-        st.stop()
-
-    staged_library_path = stage_bundled_library(save_root_text)
-
-    with st.expander("Current save folders", expanded=False):
-        for k, p in paths.items():
-            st.code(f"{k}: {p}")
-        st.caption(f"Backend loaded from: {backend_path.name}")
-        st.caption(f"Bundled library source: {library_path.name}")
+    staged_library_path = stage_bundled_library()
 
     for key, default in {
         "last_saved_files": [],
@@ -631,14 +662,14 @@ def render_run_page():
     with st.expander("Analysis settings", expanded=True):
         col1, col2, col3 = st.columns(3)
         with col1:
-            rt_min = st.number_input("RT min (minutes)", min_value=0.0, max_value=100.0, value=2.0, step=0.1)
+            rt_min = st.number_input("RT min (minutes)", min_value=0.0, max_value=100.0, value=2.0, step=0.1, help="Filter this for the lower bound of your MS/MS run")
         with col2:
-            rt_max = st.number_input("RT max (minutes)", min_value=0.0, max_value=100.0, value=25.0, step=0.1)
+            rt_max = st.number_input("RT max (minutes)", min_value=0.0, max_value=100.0, value=25.0, step=0.1, help= "Filter this for the upper bound of your MS/MS run")
         with col3:
-            tol_da = st.number_input("CyanoMetDB tolerance (Da)", min_value=0.0001, max_value=5.0, value=0.1, step=0.0001)
+            tol_da = st.number_input("CyanoMetDB tolerance (Da)", min_value=0.0001, max_value=5.0, value=0.1, step=0.0001, help= "Set your tolerance for matching to the CyanoMetDB compounds")
 
-        extract_ms1 = st.checkbox("Extract MS1 points from uploaded mzML", value=True)
-        use_reference = st.checkbox("Use reference compound normalization", value=False)
+        extract_ms1 = st.checkbox("Extract MS1 points from uploaded mzML", value=True, help="Run MS1 extraction UNLESS you have previously generated MS1 points from these SAME mzML files!!")
+        use_reference = st.checkbox("Use reference compound normalization", value=False, help="Enable this only if you have a reference compound for normalization.")
 
         ref_mz = None
         ref_tol = DEFAULT_REF_TOL
@@ -647,15 +678,15 @@ def render_run_page():
         if use_reference:
             ref_col1, ref_col2, ref_col3 = st.columns(3)
             with ref_col1:
-                ref_mz = st.number_input("Reference compound m/z", min_value=0.0, value=DEFAULT_REF_MZ, step=0.0001, format="%.4f")
+                ref_mz = st.number_input("Reference compound m/z", min_value=0.0, value=DEFAULT_REF_MZ, step=0.0001, format="%.4f", help="Reference compound precursor m/z.")
             with ref_col2:
-                ref_rt_min = st.number_input("Reference RT min (minutes)", min_value=0.0, value=DEFAULT_REF_RT_WINDOW[0], step=0.1)
+                ref_rt_min = st.number_input("Reference RT min (minutes)", min_value=0.0, value=DEFAULT_REF_RT_WINDOW[0], step=0.1, help="Lower bound of the RT window used to search for your reference compound.")
             with ref_col3:
-                ref_rt_max = st.number_input("Reference RT max (minutes)", min_value=0.0, value=DEFAULT_REF_RT_WINDOW[1], step=0.1)
-            ref_tol = st.number_input("Reference m/z tolerance (Da)", min_value=0.0001, max_value=5.0, value=DEFAULT_REF_TOL, step=0.0001, format="%.4f")
+                ref_rt_max = st.number_input("Reference RT max (minutes)", min_value=0.0, value=DEFAULT_REF_RT_WINDOW[1], step=0.1, help="Upper bound of the RT window used to search for your reference compound.")
+            ref_tol = st.number_input("Reference m/z tolerance (Da)", min_value=0.0001, max_value=5.0, value=DEFAULT_REF_TOL, step=0.0001, format="%.4f", help="Allowed m/z tolerance for the reference compound.")
             ref_rt_window = (float(ref_rt_min), float(ref_rt_max))
 
-        metadata_file = st.file_uploader("Optional metadata CSV", type=["csv"])
+        metadata_file = st.file_uploader("Optional metadata CSV", type=["csv"], help= "Make sure you have a column with either source_file or filename and the EXACT name for your .mzML file (EX: MeOH.mzML)")
         metadata_path = None
         do_blank_filter = False
         do_batch_correct = False
@@ -776,12 +807,10 @@ def render_run_page():
                     "file_count": len(saved_files),
                     "zip_size_mb": zip_path.stat().st_size / (1024 * 1024),
                     "output_count": len(output_files),
-                    "root_folder": str(output_root),
-                    "save_root": str(paths["root"]),
                 }
                 st.session_state["download_status"] = "ready"
-                st.session_state["download_status_detail"] = "Run complete. Outputs and ZIP were saved to your chosen folder."
-
+                st.session_state["download_status_detail"] = "Run complete. Please download the ZIP file below."
+                                
             except Exception as exc:
                 st.session_state["inline_log"] = safe_text(log_capture.getvalue())
                 st.session_state["download_status"] = "error"
@@ -807,7 +836,7 @@ def render_run_page():
             f"Class: {run_summary['class_tag']} | Inputs: {run_summary['file_count']} | "
             f"Packaged files: {run_summary['output_count']} | ZIP size: {run_summary['zip_size_mb']:.1f} MB"
         )
-        st.write(f"Saved under: {run_summary['save_root']}")
+        st.write("Your results are ready to download as a ZIP file.")
     else:
         st.info(status_detail)
 
