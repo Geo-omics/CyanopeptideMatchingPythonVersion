@@ -72,9 +72,7 @@ def patched_print():
 # Save-root helpers
 # -----------------------------
 def get_default_save_root() -> Path:
-    preferred = Path.home() / "Documents" / "CPM_Output"
-    return preferred
-
+    return Path(tempfile.gettempdir()) / "CPM_Output"
 
 def normalize_save_root(save_root_text: str) -> Path:
     text = (save_root_text or "").strip()
@@ -523,56 +521,33 @@ def render_home_page():
     st.title("CPM – Cyanopeptide Metabolomics Pipeline")
     st.markdown(
         """
-        This version lets you choose the base output folder inside Streamlit.
+        Upload mzML files, run the pipeline, preview outputs, and download the results as a ZIP.
 
-        Everything is saved under the folder you choose:
-        - uploads
-        - uploaded metadata
-        - uploaded MS1 points
-        - run outputs
-        - ZIP files
-        - staged library copy
+        Temporary working files are stored automatically during the run.
         """
     )
 
 
-def render_run_page():
-    st.title("CPM – Cyanopeptide Pipeline")
-
-    try:
-        backend, backend_path = load_backend_module()
-        library_path = resolve_library_path()
-    except Exception as exc:
-        st.error(str(exc))
-        st.stop()
-
-
-
-
-    st.subheader("Save location")
-
-    default_save_root = str(get_default_save_root())
-
-    save_root_text = st.text_input(
-        "Base folder for uploads, runs, logs, and ZIPs",
-        value=default_save_root,
-        help="Example: C:\\Users\\you\\Documents\\CPM_Output or D:\\CPM_Output",
-    )
-
+    save_root_text = str(get_default_save_root())
 
     try:
         paths = get_paths(save_root_text)
     except Exception as exc:
-        st.error(f"Could not create or access that save folder: {exc}")
+        st.error(f"Could not create or access temporary working folder: {exc}")
         st.stop()
 
     staged_library_path = stage_bundled_library(save_root_text)
 
-    with st.expander("Current save folders", expanded=False):
-        for k, p in paths.items():
-            st.code(f"{k}: {p}")
-        st.caption(f"Backend loaded from: {backend_path.name}")
-        st.caption(f"Bundled library source: {library_path.name}")
+    save_root_text = str(get_default_save_root())
+
+    try:
+        paths = get_paths(save_root_text)
+    except Exception as exc:
+        st.error(f"Could not create or access temporary working folder: {exc}")
+        st.stop()
+
+    staged_library_path = stage_bundled_library(save_root_text)
+
 
     for key, default in {
         "last_saved_files": [],
