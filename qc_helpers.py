@@ -307,13 +307,22 @@ def blank_filter_perfile_table(
 
     keep_rows = []
     for feat, g in df.groupby(feature_cols, sort=False):
-        g_blank = g.loc[is_blank.loc[g.index], intensity_col]
-        g_samp  = g.loc[~is_blank.loc[g.index], intensity_col]
+        g_blank = pd.to_numeric(
+            g.loc[is_blank.loc[g.index], intensity_col], errors="coerce"
+        ).replace([np.inf, -np.inf], np.nan).dropna()
 
-        b = _stat(g_blank, cfg.blank_stat)
-        s = _stat(g_samp, cfg.blank_stat)
+        g_samp = pd.to_numeric(
+            g.loc[~is_blank.loc[g.index], intensity_col], errors="coerce"
+        ).replace([np.inf, -np.inf], np.nan).dropna()
 
-        keep = (b <= 0) or ((s / b) >= cfg.blank_ratio_thresh)
+        has_blank = not g_blank.empty
+
+        if not has_blank:
+            keep = True
+        else:
+            b = _stat(g_blank, cfg.blank_stat)
+            s = _stat(g_samp, cfg.blank_stat)
+            keep = (b <= 0) or ((s / b) >= cfg.blank_ratio_thresh)
         if keep:
             if not isinstance(feat, tuple):
                 feat = (feat,)
@@ -456,13 +465,23 @@ def blank_filter_perfile_table_by_batch(
 
     keep_rows = []
     for feat_batch, g in df.groupby(group_cols, sort=False):
-        g_blank = g.loc[is_blank.loc[g.index], intensity_col]
-        g_samp  = g.loc[~is_blank.loc[g.index], intensity_col]
+        g_blank = pd.to_numeric(
+            g.loc[is_blank.loc[g.index], intensity_col], errors="coerce"
+        ).replace([np.inf, -np.inf], np.nan).dropna()
 
-        b = _stat(g_blank, cfg.blank_stat)
-        s = _stat(g_samp, cfg.blank_stat)
+        g_samp = pd.to_numeric(
+            g.loc[~is_blank.loc[g.index], intensity_col], errors="coerce"
+        ).replace([np.inf, -np.inf], np.nan).dropna()
 
-        keep = (b <= 0) or ((s / b) >= cfg.blank_ratio_thresh)
+        has_blank = not g_blank.empty
+
+        if not has_blank:
+            keep = True
+        else:
+            b = _stat(g_blank, cfg.blank_stat)
+            s = _stat(g_samp, cfg.blank_stat)
+            keep = (b <= 0) or ((s / b) >= cfg.blank_ratio_thresh)
+
         if keep:
             if not isinstance(feat_batch, tuple):
                 feat_batch = (feat_batch,)
