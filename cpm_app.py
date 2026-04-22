@@ -72,7 +72,9 @@ def patched_print():
 # Save-root helpers
 # -----------------------------
 def get_default_save_root() -> Path:
-    return Path(tempfile.gettempdir()) / "CPM_Output"
+    preferred = Path.home() / "Documents" / "CPM_Output"
+    return preferred
+
 
 def normalize_save_root(save_root_text: str) -> Path:
     text = (save_root_text or "").strip()
@@ -534,15 +536,17 @@ def render_home_page():
     )
 
 
-    save_root_text = str(get_default_save_root())
+def render_run_page():
+    st.title("CPM – Cyanopeptide Pipeline")
 
     try:
-        paths = get_paths(save_root_text)
+        backend, backend_path = load_backend_module()
+        library_path = resolve_library_path()
     except Exception as exc:
-        st.error(f"Could not create or access temporary working folder: {exc}")
+        st.error(str(exc))
         st.stop()
 
-    staged_library_path = stage_bundled_library(save_root_text)
+
 
 
     st.subheader("Save location")
@@ -868,6 +872,7 @@ def render_home_page():
 
 
 page = st.sidebar.radio("Navigation", ["About this app", "Run pipeline"], index=1)
+
 
 if page == "About this app":
     render_home_page()
