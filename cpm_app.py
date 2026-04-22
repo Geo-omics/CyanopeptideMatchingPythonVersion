@@ -151,44 +151,53 @@ def stage_bundled_library(save_root_text: str) -> Path:
 # -----------------------------
 # Persistent upload helpers
 # -----------------------------
-def _unique_persistent_path(upload_dir: Path, filename: str, raw_bytes: bytes) -> Path:
+def _dedupe_path_by_name(upload_dir: Path, filename: str) -> Path:
+    """
+    Minimal-change version:
+    - If the same filename already exists, reuse it.
+    - Avoids reading whole old/new files into memory for comparison.
+    """
     upload_dir.mkdir(parents=True, exist_ok=True)
-    base_path = upload_dir / filename
-
-    if not base_path.exists():
-        return base_path
-
-    try:
-        if base_path.read_bytes() == raw_bytes:
-            return base_path
-    except Exception:
-        pass
-
-    digest = hashlib.sha1(raw_bytes).hexdigest()[:10]
-    return upload_dir / f"{base_path.stem}_{digest}{base_path.suffix}"
+    return upload_dir / filename
 
 
 def save_and_fix_uploaded_mzml(uploaded_file, upload_dir: Path) -> Path:
-    raw_bytes = uploaded_file.getvalue()
-    out_path = _unique_persistent_path(upload_dir, uploaded_file.name, raw_bytes)
+    """
+    Stream upload to disk and apply the mzML id fix line-by-line.
+    This avoids:
+    - uploaded_file.getvalue()
+    - decoding the entire file into one giant string
+    - creating multiple large in-memory copies
+    """
+    out_path = _dedupe_path_by_name(upload_dir, uploaded_file.name)
 
-    try:
-        text = raw_bytes.decode("utf-8")
-    except UnicodeDecodeError:
-        out_path.write_bytes(raw_bytes)
-        return out_path
+    uploaded_file.seek(0)
 
-    fixed_text, _ = MZML_ID_PATTERN.subn(r'id="scan=\1"', text)
-    out_path.write_text(fixed_text, encoding="utf-8")
+    with open(out_path, "wb") as out_f:
+        for raw_line in uploaded_file:
+            try:
+                line = raw_line.decode("utf-8")
+                line = MZML_ID_PATTERN.sub(r'id="scan=\1"', line)
+                out_f.write(line.encode("utf-8"))
+            except UnicodeDecodeError:
+                # Fallback: write raw bytes if this line cannot be decoded
+                out_f.write(raw_line)
+
     return out_path
 
 
 def save_uploaded_binary(uploaded_file, upload_dir: Path) -> Path:
-    raw_bytes = uploaded_file.getvalue()
-    out_path = _unique_persistent_path(upload_dir, uploaded_file.name, raw_bytes)
-    out_path.write_bytes(raw_bytes)
-    return out_path
+    """
+    Stream any uploaded file to disk in chunks.
+    Avoids uploaded_file.getvalue().
+    """
+    out_path = _dedupe_path_by_name(upload_dir, uploaded_file.name)
 
+    uploaded_file.seek(0)
+    with open(out_path, "wb") as out_f:
+        shutil.copyfileobj(uploaded_file, out_f, length=1024 * 1024)
+
+    return out_path
 
 # -----------------------------
 # Filesystem helpers
@@ -537,16 +546,19 @@ def render_run_page():
         st.error(str(exc))
         st.stop()
 
-    if "save_root_text" not in st.session_state:
-        st.session_state["save_root_text"] = str(get_default_save_root())
+
+
 
     st.subheader("Save location")
+
+    default_save_root = str(get_default_save_root())
+
     save_root_text = st.text_input(
         "Base folder for uploads, runs, logs, and ZIPs",
-        value=st.session_state["save_root_text"],
+        value=default_save_root,
         help="Example: C:\\Users\\you\\Documents\\CPM_Output or D:\\CPM_Output",
     )
-    st.session_state["save_root_text"] = save_root_text
+
 
     try:
         paths = get_paths(save_root_text)
@@ -591,19 +603,30 @@ def render_run_page():
     )
 
     saved_files: list[Path] = []
+
     if uploaded_files:
-        saved_files = [save_and_fix_uploaded_mzml(f, paths["uploads"]) for f in uploaded_files]
-        st.session_state["last_saved_files"] = [str(p) for p in saved_files]
-        st.success(f"{len(saved_files)} file(s) ready for analysis.")
+        try:
+            saved_files = [save_and_fix_uploaded_mzml(f, paths["uploads"]) for f in uploaded_files]
+            st.session_state["last_saved_files"] = [str(p) for p in saved_files]
+
+            total_size_mb = sum(getattr(f, "size", 0) for f in uploaded_files) / (1024 * 1024)
+            st.success(f"{len(uploaded_files)} file(s) selected.")
+            st.caption(f"Total selected size: {total_size_mb:.1f} MB")
+
+            with st.expander("Files selected for analysis", expanded=False):
+                for f, p in zip(uploaded_files, saved_files):
+                    size_mb = getattr(f, "size", 0) / (1024 * 1024)
+                    st.code(f"{f.name} ({size_mb:.1f} MB) -> {p}")
+        except Exception as exc:
+            st.error(f"Failed while saving uploaded mzML files: {safe_text(exc)}")
+
     elif st.session_state.get("last_saved_files"):
         saved_files = [Path(p) for p in st.session_state["last_saved_files"] if Path(p).exists()]
         if saved_files:
-            st.info(f"Using {len(saved_files)} previously uploaded mzML file(s).")
-
-    if saved_files:
-        with st.expander("Files that will be analyzed", expanded=False):
-            for p in saved_files:
-                st.code(str(p))
+            st.info(f"Using {len(saved_files)} previously saved mzML file(s).")
+            with st.expander("Files that will be analyzed", expanded=False):
+                for p in saved_files:
+                    st.code(str(p))
 
     with st.expander("Analysis settings", expanded=True):
         col1, col2, col3 = st.columns(3)
