@@ -14,13 +14,13 @@ import numpy as np
 import pandas as pd
 from pyteomics import mzml
 
-import massql_utils as mu
-import adduct_finder as af
-import adduct_pipeline as ap
+from . import massql_utils as mu
+from . import adduct_finder as af
+from . import adduct_pipeline as ap
 
 DEFAULT_LIB = Path(__file__).parent / "CyanoMetDB_Version03.xlsx"
 
-from summary_builder import (
+from .summary_builder import (
     make_summary_ind,
     explode_matches_to_per_file,
     add_ms1_auc_from_points,
@@ -28,7 +28,7 @@ from summary_builder import (
     make_scan_level_has_table,
 )
 
-from qc_helpers import (
+from .qc_helpers import (
     QCConfig,
     load_metadata,
     load_ms1_points,
@@ -42,14 +42,14 @@ from qc_helpers import (
     flatten_subfolders,
 )
 
-from rt_histograms import plot_rt_histograms
-from cyanopeptide_counts_plots import plot_indiv_counts
-from rt_mz_plot import plot_precursor_rt, plot_per_file_legend
-from plotting_ind_heatmap import plot_heatmaps
-from indiv_combo_dot_plot import plot_indiv_scatter
-from sum_intensity_from_scans import sum_intensities
-from ms2_tilemap_intensities import plot_has_tilemap
-from cyanometdb_match import (
+from .rt_histograms import plot_rt_histograms
+from .cyanopeptide_counts_plots import plot_indiv_counts
+from .rt_mz_plot import plot_precursor_rt, plot_per_file_legend
+from .plotting_ind_heatmap import plot_heatmaps
+from .indiv_combo_dot_plot import plot_indiv_scatter
+from .sum_intensity_from_scans import sum_intensities
+from .ms2_tilemap_intensities import plot_has_tilemap
+from .cyanometdb_match import (
     load_library,
     read_any_table,
     match_ms1_to_lib,
