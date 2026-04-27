@@ -1,0 +1,30 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools >= 78.0", "setuptools-scm>=8.0"]
+
+[project]
+name = "CyanopeptideMatching"
+requires-python = ">=3.13.0"
+dynamic = ["version"]
+
+classifiers = []
+dependencies = [
+    'pyteomics >= 4.7',
+    'massql >= 2026',
+    'matplotlib >= 3.10',
+    'networkx >= 3.2',
+    'numpy >= 2.2',
+    'openpyxl >= 3.1',
+    'pandas >= 2.2',
+    'seaborn >= 0.13',
+]
+
+[project.scripts]
+cpm = "cpm.cpm:main"
+
+[tool.setuptools]
+package-dir = {'cpm' = 'cpm', 'cpm.data' = 'data/'}
+
+[tool.setuptools_scm]
+version_file = "cpm/_version.py"
+
