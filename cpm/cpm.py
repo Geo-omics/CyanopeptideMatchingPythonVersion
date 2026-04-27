@@ -18,7 +18,7 @@ from . import massql_utils as mu
 from . import adduct_finder as af
 from . import adduct_pipeline as ap
 
-DEFAULT_LIB = Path(__file__).parent / "CyanoMetDB_Version03.xlsx"
+DEFAULT_LIB = Path(__file__).parent / "data" / "CyanoMetDB_Version03.xlsx"
 
 from .summary_builder import (
     make_summary_ind,
