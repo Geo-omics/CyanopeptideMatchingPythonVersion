@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack, nullcontext
+import importlib
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -17,8 +19,6 @@ from pyteomics import mzml
 from . import massql_utils as mu
 from . import adduct_finder as af
 from . import adduct_pipeline as ap
-
-DEFAULT_LIB = Path(__file__).parent / "data" / "CyanoMetDB_Version03.xlsx"
 
 from .summary_builder import (
     make_summary_ind,
@@ -57,6 +57,8 @@ from .cyanometdb_match import (
     write_outputs,
     plot_matched_tiles,
 )
+
+BUNDLED_LIB_PATH = "data/CyanoMetDB_Version03.xlsx"
 
 # ------------------------------------------------------------------
 # Ion lists
@@ -929,6 +931,28 @@ def merge_timestamped_subfolders(run_dir: str | Path, remove_empty: bool = True)
     print(f"[DONE] MS1 points file used: {ms1_points_file}")
     return run_dir
 
+
+def get_default_lib_path():
+    """
+    Get path to the bundled DB file.  It might be in two locations,
+    depending if we're running out of the git repository (or similar) or if
+    we're a properly installed package.
+
+    The return value is a context manager.
+    """
+    fullpath = Path(BUNDLED_LIB_PATH)
+    data_pkg = fullpath.parent.parts[0]  # min of two parts
+    path = Path(*fullpath.parts[1:])
+    for anchor in [data_pkg, 'cpm.' + data_pkg]:
+        try:
+            if importlib.resources.is_resource(anchor, path):
+                return importlib.resources.path(anchor, path)
+        except ModuleNotFoundError:
+            pass
+    print(f'[NOTICE] Could not find bundled {BUNDLED_LIB_PATH}')
+    return nullcontext(None)
+
+
 # ------------------------------------------------------------------
 # Pipeline notebook
 # ------------------------------------------------------------------
@@ -939,7 +963,7 @@ def run_pipeline_notebook(
     input_dir: str | Path | None = None,
     pattern: str = "*.mzML",
     metadata_path: str | Path | None = None,
-    CyanoMetDBLibrary: str | Path | None = DEFAULT_LIB,
+    CyanoMetDBLibrary: str | Path | None = None,
     ms1_points_file: str | Path | None = None,
     output_root: str | Path = "pipeline_outputs",
     extract_ms1: bool = False,
@@ -994,7 +1018,11 @@ def run_pipeline_notebook(
                 print(f"   - {f}")
 
             metadata_path = Path(metadata_path) if metadata_path is not None else None
-            CyanoMetDBLibrary = Path(CyanoMetDBLibrary) if CyanoMetDBLibrary is not None else None
+            if CyanoMetDBLibrary is None:
+                estack = ExitStack()  # left open until end-of-program
+                CyanoMetDBLibrary = estack.enter_context(get_default_lib_path())
+            elif isinstance(CyanoMetDBLibrary, str):
+                CyanoMetDBLibrary = Path(CyanoMetDBLibrary)
             ms1_points_file = Path(ms1_points_file) if ms1_points_file is not None else None
 
             print(f"[INFO] metadata_path: {metadata_path}")
@@ -1066,6 +1094,11 @@ def run_pipeline_notebook(
 # CLI
 # ------------------------------------------------------------------
 def main():
+    estack = ExitStack()
+    #  Obtain a pathlib.Path to the bundled DB/lib, the exit stack stays open
+    #  until end of program.
+    default_lib_path = estack.enter_context(get_default_lib_path())
+
     parser = argparse.ArgumentParser(description="Cyanopeptide pipeline CLI")
 
     parser.add_argument(
@@ -1094,8 +1127,12 @@ def main():
     parser.add_argument(
         "--CyanoMetDBLibrary",
         type=Path,
-        default=DEFAULT_LIB,
-        help="CyanoMetDB library Excel file (default: bundled CyanoMetDB_Version03.xlsx)",
+        default=default_lib_path,
+        required=(default_lib_path is None),
+        help="CyanoMetDB library Excel file " + (
+            "(required)" if default_lib_path is None
+            else f"(default: bundled {default_lib_path.name})"
+        ),
     )
     parser.add_argument("--ms1-points-file", type=Path, default=None)
     parser.add_argument("--output-root", type=Path, default=Path("pipeline_outputs"))
