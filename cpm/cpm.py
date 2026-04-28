@@ -1,16 +1,14 @@
-#CPM_cli_04_14_2026_test.py
+# CPM_cli_04_14_2026_test.py
 
 from __future__ import annotations
 
 import argparse
-from contextlib import ExitStack, nullcontext
-import importlib
-import sys
-from pathlib import Path
+from contextlib import ExitStack, nullcontext, redirect_stdout, redirect_stderr
 from datetime import datetime
+import importlib
+from pathlib import Path
 import shutil
-from contextlib import redirect_stdout, redirect_stderr
-
+import sys
 
 import numpy as np
 import pandas as pd
@@ -38,13 +36,12 @@ from .qc_helpers import (
     blank_filter_perfile_table,
     blank_filter_perfile_table_by_batch,
     save_qc_audit,
-    drop_blank_rows,
     flatten_subfolders,
 )
 
 from .rt_histograms import plot_rt_histograms
 from .cyanopeptide_counts_plots import plot_indiv_counts
-from .rt_mz_plot import plot_precursor_rt, plot_per_file_legend
+from .rt_mz_plot import plot_precursor_rt
 from .plotting_ind_heatmap import plot_heatmaps
 from .indiv_combo_dot_plot import plot_indiv_scatter
 from .sum_intensity_from_scans import sum_intensities
@@ -67,7 +64,8 @@ MCIONS = [135.0804, 163.1113, 213.0870]
 MPIONS = [184.06, 215.1192, 243.1127, 134.0961, 181.1331, 169.0967, 150.0912, 167.1178, 454.15]
 ARIONS = [112.0964, 140.1066, 334.0838, 300.1232, 284.1268, 250.1440, 221.1646, 281.1914, 314.2199]
 ABIONS = [114.0550, 164.1069, 192.1019, 233.1285, 263.1391, 362.2075]
-MGIONS = [100.1122, 134.0727, 168.0341, 201.9955, 114.1278, 148.0888, 182.0494, 128.1423, 162.1039, 196.0639, 142.1590, 176.1195, 210.0795]
+MGIONS = [100.1122, 134.0727, 168.0341, 201.9955, 114.1278, 148.0888, 182.0494, 128.1423, 162.1039,
+          196.0639, 142.1590, 176.1195, 210.0795]
 
 # ------------------------------------------------------------------
 # Ion labels dictionary
@@ -155,6 +153,7 @@ CLASS_CONFIGS = {
     },
 }
 
+
 # ------------------------------------------------------------------
 # Utilities
 # ------------------------------------------------------------------
@@ -181,6 +180,7 @@ def _make_pipeline_log(output_root, class_tag=None):
     tag = f"_{class_tag}" if class_tag else ""
     log_path = pipelinelog_dir / f"pipeline_log{tag}_{ts}.txt"
     return pipelinelog_dir, log_path
+
 
 def _parse_scan_number(spec: dict) -> int | None:
     sid = spec.get("id", "")
@@ -387,8 +387,6 @@ def run_class_pipeline(
     adduct_dir = run_dir / "Adduct_and_summary_outputs"
     match_dir = run_dir / "CyanoMetDB_matches_out"
 
- 
-
     for d in [
         raw_plots_dir,
         auc_dir,
@@ -532,10 +530,9 @@ def run_class_pipeline(
     else:
         perfile_raw = perfile_summary_auc.copy()
 
-
     # ------------------------------------------------------------
-# 6.2) Blank filtering
-# ------------------------------------------------------------
+    # 6.2) Blank filtering
+    # ------------------------------------------------------------
     feature_cols = [c for c in ["merged_precmz", "rt_median", "charge"] if c in perfile_raw.columns]
 
     if do_blank_filter and metadata is not None:
@@ -608,7 +605,6 @@ def run_class_pipeline(
     has_cols_clean = [c for c in perfile_clean_bc.columns if c.startswith("has_")]
     perfile_clean_bc = perfile_clean_bc.drop(columns=has_cols_clean, errors="ignore")
 
-
     # ------------------------------------------------------------
     # 7) Save AUC outputs
     # ------------------------------------------------------------
@@ -616,7 +612,6 @@ def run_class_pipeline(
     raw_pooled_out = auc_dir / f"{class_tag}_pooled_RAW_{ts}.csv"
     clean_perfile_out = auc_dir / f"{class_tag}_perfile_CLEAN_{ts}.csv"
     clean_pooled_out = auc_dir / f"{class_tag}_pooled_CLEAN_{ts}.csv"
-
 
     perfile_raw.to_csv(raw_perfile_out, index=False)
     pooled_raw.to_csv(raw_pooled_out, index=False)
@@ -678,7 +673,7 @@ def run_class_pipeline(
             intensity_col_local = "ms1_auc_over_ref" if "ms1_auc_over_ref" in g.columns else "ms1_auc"
 
             blank = g.loc[g["is_blank"], intensity_col_local]
-            samp  = g.loc[~g["is_blank"], intensity_col_local]
+            samp = g.loc[~g["is_blank"], intensity_col_local]
 
             bmed = blank.median()
             smed = samp.median()
@@ -860,7 +855,10 @@ def run_class_pipeline(
         plot_matched_tiles(matched_only, out_dir_ts=out_dir_ts, ts=f"{ts2}_CLEAN")
     # flatten timestamped subfolders into base folders
     flatten_subfolders(run_dir)
-#trying to merge these together so we don't have repeat folders created... not working. code runs but the folders are not merging. 
+
+
+# trying to merge these together so we don't have repeat folders created... not
+# working. code runs but the folders are not merging.
 def merge_timestamped_subfolders(run_dir: str | Path, remove_empty: bool = True):
     """
     Merge files from timestamped duplicate folders into their base folder.
@@ -884,8 +882,8 @@ def merge_timestamped_subfolders(run_dir: str | Path, remove_empty: bool = True)
     for dup_dir in folders_sorted:
         name = dup_dir.name
 
-        #Find base folder by stripping the last 2 underscore-separated chunks
-            #Adduct_and_summary_outputs_26-03-22_18-23-02 -> Adduct_and_summary_outputs
+        # Find base folder by stripping the last 2 underscore-separated chunks
+        # Adduct_and_summary_outputs_26-03-22_18-23-02 -> Adduct_and_summary_outputs
         parts = name.split("_")
         if len(parts) < 3:
             continue
@@ -899,7 +897,7 @@ def merge_timestamped_subfolders(run_dir: str | Path, remove_empty: bool = True)
         if not base_dir.exists() or base_dir == dup_dir:
             continue
 
-        print(f"[INFO] Merging:")
+        print("[INFO] Merging:")
         print(f"       from: {dup_dir}")
         print(f"         to: {base_dir}")
 
@@ -1090,6 +1088,7 @@ def run_pipeline_notebook(
 
             return result
 
+
 # ------------------------------------------------------------------
 # CLI
 # ------------------------------------------------------------------
@@ -1158,7 +1157,6 @@ def main():
     parser.add_argument("--intensity-min", type=float, default=0.0)
     parser.add_argument("--assume-time-unit", default="min")
 
-
     args = parser.parse_args()
 
     validate_class_labels()
@@ -1181,7 +1179,7 @@ def main():
         None
         if args.ref_rt_min is None and args.ref_rt_max is None
         else (args.ref_rt_min, args.ref_rt_max)
-)
+    )
     ms1_points_file = args.ms1_points_file
     if args.extract_ms1:
         ms1_points_file = build_ms1_points(
