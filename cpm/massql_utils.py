@@ -2,12 +2,44 @@
 from typing import List, Tuple, Dict, Iterable, Optional
 import os
 import math
+import re
+import tempfile
+
 import numpy as np
 import pandas as pd
 from massql import msql_engine, msql_fileloading
 
+
 # -------------------------------------------------------------------------------------------
-#Keep only ms2 spectra that belong to features retained in ms1 feature table
+# Workaround for mzML files with scan IDs like: id="merged=4505 row=0"
+# MassQL expects scan IDs like: id="scan=4505" so if it has row=0 it will break. this changes that so it's all formatted correctly
+# -------------------------------------------------------------------------------------------
+def _fix_mzml_scan_ids(input_file: str) -> str:
+    if not input_file.lower().endswith(".mzml"):
+        return input_file
+
+    with open(input_file, "r", errors="ignore") as f:
+        text = f.read()
+
+    fixed_text = re.sub(
+        r'id="merged=(\d+)\s+row=\d+"',
+        r'id="scan=\1"',
+        text
+    )
+
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w",
+        suffix=".mzML",
+        delete=False
+    )
+    tmp.write(fixed_text)
+    tmp.close()
+
+    return tmp.name
+
+
+# -------------------------------------------------------------------------------------------
+# Keep only ms2 spectra that belong to features retained in ms1 feature table
 # -------------------------------------------------------------------------------------------
 def _filter_ms2_df_to_kept_features(
     ms2_df: pd.DataFrame,
@@ -18,20 +50,13 @@ def _filter_ms2_df_to_kept_features(
     ms2_precursor_col: str = "precmz",
     ms2_rt_col: str = "rt",
 ) -> pd.DataFrame:
-    """
-    Feature-aware MS2 restriction:
-    keep only MS2 rows whose (precmz, rt) match any kept feature (merged_precmz, rt_median)
-    within tolerances.
 
-    Requires kept_feats columns: merged_precmz, rt_median
-    """
     if ms2_df is None or ms2_df.empty:
         return ms2_df
     if kept_feats is None or len(kept_feats) == 0:
-        return ms2_df  # no filter applied
+        return ms2_df
 
     if ms2_precursor_col not in ms2_df.columns or ms2_rt_col not in ms2_df.columns:
-        # Can't filter if columns aren't present
         return ms2_df
 
     if "merged_precmz" not in kept_feats.columns or "rt_median" not in kept_feats.columns:
@@ -44,17 +69,21 @@ def _filter_ms2_df_to_kept_features(
     kept_rt = kept_feats["rt_median"].astype(float).to_numpy()
 
     keep_mask = np.zeros(len(ms2_df), dtype=bool)
+
     for mz0, rt0 in zip(kept_mz, kept_rt):
         keep_mask |= (
-            (ms2_prec >= (mz0 - mz_tol_da)) & (ms2_prec <= (mz0 + mz_tol_da)) &
-            (ms2_rt >= (rt0 - rt_tol_min)) & (ms2_rt <= (rt0 + rt_tol_min))
+            (ms2_prec >= (mz0 - mz_tol_da)) &
+            (ms2_prec <= (mz0 + mz_tol_da)) &
+            (ms2_rt >= (rt0 - rt_tol_min)) &
+            (ms2_rt <= (rt0 + rt_tol_min))
         )
 
     return ms2_df.loc[keep_mask].copy()
 
 
 # -------------------------------------------------------------------------------------------
-# Load a single file (optionally globally filtered)
+# Load a single file
+# -------------------------------------------------------------------------------------------
 def load_file(
     input_file: str,
     *,
@@ -63,33 +92,25 @@ def load_file(
     rt_tol_min: float = 0.3,
     blank_files: Optional[set] = None,
 ):
-    """
-    Load MS1/MS2 dataframes once for speed.
 
-    Optional behavior:
-      - If blank_files is provided and basename(input_file) is in it:
-          return EMPTY dfs (skip blanks entirely)
-      - If kept_feature_table is provided:
-          filter ms2_df to kept features (precmz/rt) before any MassQL searches
-    """
     base = os.path.basename(input_file)
 
-    # skip blanks entirely if requested
+    fixed_input_file = _fix_mzml_scan_ids(input_file)
+
     if blank_files and base in blank_files:
-        ms1_df, ms2_df = msql_fileloading.load_data(input_file)
+        ms1_df, ms2_df = msql_fileloading.load_data(fixed_input_file)
         return ms1_df.iloc[0:0].copy(), ms2_df.iloc[0:0].copy()
 
-    ms1_df, ms2_df = msql_fileloading.load_data(input_file)
+    ms1_df, ms2_df = msql_fileloading.load_data(fixed_input_file)
 
-    # add consistent source_file column
     ms1_df = ms1_df.copy()
     ms2_df = ms2_df.copy()
+
     if "source_file" not in ms1_df.columns:
         ms1_df["source_file"] = base
     if "source_file" not in ms2_df.columns:
         ms2_df["source_file"] = base
 
-    # feature-aware MS2 restriction
     if kept_feature_table is not None and len(kept_feature_table) > 0:
         ms2_df = _filter_ms2_df_to_kept_features(
             ms2_df,
@@ -105,6 +126,7 @@ def load_file(
 
 # -------------------------------------------------------------------------------------------
 # Load multiple files
+# -------------------------------------------------------------------------------------------
 def load_files(
     input_files: List[str],
     *,
@@ -113,12 +135,7 @@ def load_files(
     rt_tol_min: float = 0.3,
     blank_files: Optional[set] = None,
 ) -> Dict[str, object]:
-    """
-    Load MS1/MS2 dataframes from multiple files.
-    Returns both per-file results and merged results (with source_file column).
 
-    If kept_feature_table is provided, ms2 is filtered during loading.
-    """
     ms1_list, ms2_list = [], []
     per_file: Dict[str, Dict[str, pd.DataFrame]] = {}
 
@@ -130,6 +147,7 @@ def load_files(
             rt_tol_min=rt_tol_min,
             blank_files=blank_files,
         )
+
         base = os.path.basename(f)
         per_file[base] = {"ms1": ms1_df, "ms2": ms2_df}
         ms1_list.append(ms1_df)
@@ -143,27 +161,34 @@ def load_files(
 
 # -------------------------------------------------------------------------------------------
 # Build a MassQL query string
+# -------------------------------------------------------------------------------------------
 def build_massql_query(
     ions_mz: Iterable[float],
-    tol_mz: float = 0.01,   # if no tolerance is provide use 0.01
+    tol_mz: float = 0.01,
     polarity: Optional[str] = None,
     rt_window: Optional[Tuple[float, float]] = None,
 ) -> str:
+
     clauses = []
+
     if polarity:
         clauses.append(f"POLARITY={polarity}")
+
     if rt_window:
         rtmin, rtmax = rt_window
         clauses.append(f"RTMIN={rtmin} AND RTMAX={rtmax}")
+
     for m in ions_mz:
         clauses.append(f"MS2PROD={m}:TOLERANCEMZ={tol_mz}")
+
     where = " AND ".join(clauses)
+
     return f"QUERY scaninfo(MS2DATA) WHERE {where}"
 
 
-
 # -------------------------------------------------------------------------------------------
-# Run across files (individual ions)
+# Run across files
+# -------------------------------------------------------------------------------------------
 def run_across_files_individual(
     input_files: Iterable[str],
     ions: Iterable[float],
@@ -173,11 +198,9 @@ def run_across_files_individual(
     *,
     data: Optional[Dict[str, object]] = None,
 ) -> pd.DataFrame:
-    """
-    If `data` is provided (output of load_files), uses preloaded ms1_df/ms2_df.
-    This lets global MS2 filtering apply BEFORE class searches.
-    """
+
     rows = []
+
     for f in input_files:
         base = os.path.basename(f)
 
@@ -188,8 +211,20 @@ def run_across_files_individual(
             ms1_df, ms2_df = load_file(f)
 
         for ion in ions:
-            q = build_massql_query([ion], tol_mz=tol_mz, polarity=polarity, rt_window=rt_window)
-            df = msql_engine.process_query(q, f, ms1_df=ms1_df, ms2_df=ms2_df)
+            q = build_massql_query(
+                [ion],
+                tol_mz=tol_mz,
+                polarity=polarity,
+                rt_window=rt_window,
+            )
+
+            df = msql_engine.process_query(
+                q,
+                f,
+                ms1_df=ms1_df,
+                ms2_df=ms2_df,
+            )
+
             if df is not None and not df.empty:
                 df = df.copy()
                 df["ion"] = float(ion)
@@ -197,8 +232,6 @@ def run_across_files_individual(
                 rows.append(df)
 
     return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
-
-
 # -------------------------------------------------------------------------------------------
 # Add friendly labels for MP ions
 def add_MP_labels(df: pd.DataFrame, ion_to_MP: Dict[float, str], label_col: str = "MP") -> pd.DataFrame:
