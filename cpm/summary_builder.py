@@ -373,7 +373,7 @@ def add_ms1_auc_from_points(
         if len(x) < 2:
             aucs.append(0.0)
         else:
-            aucs.append(float(np.trapz(y, x)))
+            aucs.append(float(np.trapezoid(y, x)))
 
         xic_n_points.append(int(len(x)))
         xic_n_rows.append(int(len(win)))

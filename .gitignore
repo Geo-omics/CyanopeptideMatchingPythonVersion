@@ -1,0 +1,8 @@
+
+# package building artifacts
+CyanopeptideMatching.egg-info/
+cpm/_version.py
+dist/
+
+# default output dir
+pipeline_outputs/
