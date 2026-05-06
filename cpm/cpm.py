@@ -474,18 +474,22 @@ def run_class_pipeline(
     # ------------------------------------------------------------
     # 4) Load MS1 points
     # ------------------------------------------------------------
-    default_ms1_file = "ms1_points.csv"
-
     if ms1_points_file is None:
-        if Path(default_ms1_file).exists():
-            ms1_points_file = default_ms1_file
-        else:
-            raise ValueError(
-                "MS1 points file is required. "
-                "Use --extract-ms1 or provide --ms1-points-file"
-            )
+        print("No MS1 points file provided. Automatically extracting MS1...")
+
+        ms1_points_file = build_ms1_points(
+            files,
+            output_root / "MS1_points",
+            mz_round=None,
+            intensity_min=0.0,
+            assume_time_unit="min",
+            rt_window=rt_window,
+        )
+
+        print(f"[INFO] built ms1_points_file: {ms1_points_file}")
 
     ms1_points = load_ms1_points(ms1_points_file)
+
     # ------------------------------------------------------------
     # 5) Metadata + QC config
     # ------------------------------------------------------------
